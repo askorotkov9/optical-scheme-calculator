@@ -14,21 +14,22 @@ LENS_RESULT_FIELDS = [
     # (имя, тип, заголовок для GUI, форматтер)
     ("tf_id", str, None, None),
     ("index", int,  None, None),
-    ("lens_index_in_tf", int, 'Lens', str),
+    ("lens_index_in_tf", int, 'Lens in TF', str),
+    ("lens_index_in_block", int, 'Lens number', str), #вставить колонку с R
     ("position", float, "Pos (m)", lambda x: f"{x:.4f}"),
-    ("L1", float, "L1", lambda x: f"{x:.4f}"),
-    ("L2", float, "L2", lambda x: "Inf" if x == float('inf') else f"{x:.4f}"),
-    ("F", float, "F (m)", lambda x: f"{x:.4f}"),
-    ("sx", float, "sx (um)", lambda x: f"{x * 1e6:.2f}"),
-    ("sy", float, "sy (um)", lambda x: f"{x * 1e6:.2f}"),
-    ("sfpx", float, "sfpx (um)", lambda x: f"{x * 1e6:.2f}"),
-    ("sfpy", float, "sfpy (um)", lambda x: f"{x * 1e6:.2f}"),
-    ("alx", float, "Alx (um)", lambda x: f"{x * 1e6:.2f}"),
-    ("aly", float, "Aly (um)", lambda x: f"{x * 1e6:.2f}"),
-    ("sfx", float, "Size X (um)", lambda x: f"{x * 1e6:.2f}"),
-    ("sfy", float, "Size Y (um)", lambda x: f"{x * 1e6:.2f}"),
-    ("T", float, "Trans (%)", lambda x: f"{x * 100:.1f}"),
-    ("T_block", float, "T block (%)", lambda x: f"{x * 100:.1f}"),
+    ("L1", float, "L1, m", lambda x: f"{x:.4f}"),
+    ("L2", float, "L2, m", lambda x: "Inf" if x == float('inf') else f"{x:.4f}"),
+    ("F", float, "F, m", lambda x: f"{x:.4f}"),
+    ("sx", float, "sx, um", lambda x: f"{x * 1e6:.2f}"),
+    ("sy", float, "sy, um", lambda x: f"{x * 1e6:.2f}"),
+    ("sfpx", float, "sfpx, um", lambda x: f"{x * 1e6:.2f}"),
+    ("sfpy", float, "sfpy, um", lambda x: f"{x * 1e6:.2f}"),
+    ("alx", float, "Alx, um", lambda x: f"{x * 1e6:.2f}"),
+    ("aly", float, "Aly, um", lambda x: f"{x * 1e6:.2f}"),
+    ("sfx", float, "Focus X, um", lambda x: f"{x * 1e6:.2f}"),
+    ("sfy", float, "Focus Y, um", lambda x: f"{x * 1e6:.2f}"),
+    ("T", float, "Trans., %", lambda x: f"{x * 100:.1f}"),
+    ("T_block", float, "T block, %", lambda x: f"{x * 100:.1f}"),
     #("T_total", float, "T total (%)", lambda x: f"{x * 100:.1f}"),
     ("M", float, "M", lambda x: f"{x:.3e}"),
     ("M_total", float, "M total", lambda x: f"{x:.3e}"),
@@ -71,6 +72,7 @@ class BeamState:
 # --- 2. Физическое ядро (Physics Engine) ---
 
 class Formulas:
+    use_fwhm = True
     """Сборник формул. Чистые функции, не хранят состояния"""
 
     @staticmethod
@@ -100,7 +102,9 @@ class Formulas:
     
     @staticmethod
     def Aeff_single_lens(F, delta, mu): #сделать свитч на sigma
-        return 2.35482 * math.sqrt(F * delta / mu)
+        sigma_aeff = math.sqrt(F * delta / mu)
+        fwhm_aeff = 2.35482 * sigma_aeff
+        return fwhm_aeff if Formulas.use_fwhm else sigma_aeff
 
     @staticmethod
     def Aeff_system(Aeff_prev, Aeff_curr):
@@ -158,12 +162,19 @@ class Formulas:
 
     @staticmethod
     def transmission(A, Alx, Aly, sfpx, sfpy, mu, d):
-        const = math.sqrt(math.log(2))
+
+        if Formulas.use_fwhm:
+            const = math.sqrt(math.log(2))
+        else:
+            const = 1/ (2 * math.sqrt(2))
+
+
         erf_alx = math.erf(A * const / Alx)
         erf_aly = math.erf(A * const / Aly)
         erf_sfpx = math.erf(A * const / sfpx)
         erf_sfpy = math.erf(A * const / sfpy)
         T = math.exp(-mu * d) * (Alx * Aly) / (sfpx * sfpy) * (erf_alx * erf_aly) / (erf_sfpx * erf_sfpy)
+        #return fwhm_aeff if Formulas.use_fwhm else sigma_aeff
         return T
     
     @staticmethod
@@ -190,7 +201,7 @@ class Formulas:
 
     @staticmethod
     def get_k_param(A, Aeff):
-        sigma = Aeff / 2.35482 #сделать свитч на sigma
+        sigma = Aeff / 2.35482 #FWHM / 2.35482
         n_pow = 6
         A0 = 6 * sigma
 
@@ -315,7 +326,8 @@ class Calculator:
             sfx = Formulas.sf(M, state.sx, diff_lim)
             sfy = Formulas.sf(M, state.sy, diff_lim)
 
-            T = Formulas.transmission(A_phys, alx, aly, sfpx, sfpy, mu, d)
+            ''' Поменять расчёт для сценария sigma'''
+            T = Formulas.transmission(A_phys, alx, aly, sfpx, sfpy, mu, d) 
             #T_total = Formulas.transmission_total(T_total, T)
 
             L_total_dist = L1 + L2
@@ -343,6 +355,7 @@ class Calculator:
                 'is_last_in_tf': lens_conf.get('is_last_in_tf', False),
                 'tf_id': lens_conf.get('tf_id', 'Unknown'),
                 'lens_index_in_tf': lens_conf.get('lens_index_in_tf', i + 1),
+                'lens_index_in_block': lens_conf.get('lens_index_in_block', 1),
                 'index': i + 1,
                 'position': state.z + t,
                 'L1': L1,
@@ -401,11 +414,6 @@ class Calculator:
             delta = lens_conf['delta']
             p = lens_conf['p']
             mu = lens_conf['mu']
-
-            #print(f"DEBUG: R={R:.2e}, delta={delta:.2e}, p={p:.2e}, mu={mu:.2e}")
-
-            #F = Formulas.F_single_lens(R, delta, p)
-            #print(f" → F = {F:.4f} m")
 
         return results, state
     

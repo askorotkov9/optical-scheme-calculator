@@ -80,7 +80,7 @@ class TFEditorDialog(QDialog):
         lay.setAlignment(Qt.AlignCenter)
         lay.setContentsMargins(0,0,0,0)
         container.chk = chk
-        self.table.setCellWidget(row, 2, container)
+        self.table.setCellWidget(row, 1, container)
 
         # Position (read-only)
         pos_item = QTableWidgetItem(f"{row * 1.4:.1f} mm")  # пример

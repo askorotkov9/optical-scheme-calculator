@@ -2,7 +2,7 @@ import sys
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QGroupBox, QLabel, QLineEdit, QComboBox, QCheckBox, 
                              QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, 
-                             QSpinBox, QDoubleSpinBox, QTabWidget, QSplitter, QTextEdit, QMessageBox, QDialog)
+                             QSpinBox, QDoubleSpinBox, QTabWidget, QSplitter, QTextEdit, QMessageBox, QDialog, QSizePolicy, QSizePolicy)
 from PyQt5.QtCore import Qt
 
 from main_controller import AdvancedController # type: ignore
@@ -10,6 +10,7 @@ from parameters_micro1 import LENS_PRESETS, LensGenerator
 from lens_editor import TFEditorDialog, LensDetailDialog # type: ignore
 from computations import LENS_RESULT_FIELDS
 from column_settings import ColumnSettingsDialog # type: ignore
+from source_editor import SourceEditorDialog # type: ignore
 
 # --- Расширение контроллера для поддержки детальной настройки --- #Перенести в main_controller (?)
 
@@ -105,14 +106,48 @@ class LensGroupEditor(QWidget):
 class XRayCalcApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("X-Ray Transfocator Calculator (PyQt5)")
+        self.setWindowTitle("X-Ray Transfocator Calculator (PyQt5)") #Optical Lens Scheme Parameters Calculator
         self.resize(1200, 800)
-        self.current_display_fields = None
+
+        default_display_fields = {'lens_index_in_block','position', 'L1', 'L2', 'sfx', 'sfy', 'T', 'M'}
+        self.current_display_fields = [
+            field for field in LENS_RESULT_FIELDS
+            if field[0] in default_display_fields and field[2] is not None
+]
         
         # Инициализация контроллера
         self.controller = AdvancedController()
+        self.tf1_air_config = [
+            {'preset': 'R500', 'active': (i < 9)}
+            for i in range(100)
+        ]
+
+        # TF2 Air: 100 линз, первые 9 активны  
+        self.tf2_air_config = [
+            {'preset': 'R50', 'active': (i < 9)}
+            for i in range(100)
+        ]
+
+        self.source_params = {
+            'energy': 10300.0,
+            'sx_fwhm': 32.9 * 2.35482,   # мкм
+            'sy_fwhm': 5.9 * 2.35482,    # мкм
+            'wx_fwhm': 9.4 * 2.35482,    # мкрад
+            'wy_fwhm': 11.0 * 2.35482,   # мкрад
+            #'use_fwhm': True,
+            'material': 'Be'
+        }
+
+        self.use_fwhm = True
+
+        self.lbl_source_info = QLabel("")
+        self.lbl_source_info.setWordWrap(True)
+        self.lbl_source_info.setStyleSheet("font-family: monospace; font-size: 9pt;")
 
         self.init_ui()
+
+        self.update_energy_input()
+        self.update_source_info_label()
 
     def init_ui(self):
         central_widget = QWidget()
@@ -131,10 +166,21 @@ class XRayCalcApp(QMainWindow):
         gb_global = QGroupBox("Source & Global Params")
         gl_layout = QVBoxLayout()
         
-        lbl_e = QLabel("Energy, eV:")
+        hbox_energy = QHBoxLayout()
+        hbox_energy.addWidget(QLabel("Energy, eV:"))
         self.inp_energy = QLineEdit("10300")
-        gl_layout.addWidget(lbl_e)
-        gl_layout.addWidget(self.inp_energy)
+        self.inp_energy.editingFinished.connect(self.on_energy_input_changed)
+        
+        hbox_energy.addWidget(self.inp_energy)
+        gl_layout.addLayout(hbox_energy)
+
+        # Кнопка Edit Source
+        self.btn_edit_source = QPushButton("Edit Source")
+        self.btn_edit_source.clicked.connect(self.open_source_editor)
+        gl_layout.addWidget(self.btn_edit_source)
+        gl_layout.addWidget(self.lbl_source_info)
+
+        
         gb_global.setLayout(gl_layout)
         left_layout.addWidget(gb_global)
 
@@ -155,9 +201,11 @@ class XRayCalcApp(QMainWindow):
         tf1_layout.addLayout(hbox_tf1_type)
         tf1_layout.addWidget(self.btn_edit_tf1)
 
-        self.btn_edit_tf1.clicked.connect(lambda: self.open_tf_editor('TF1', self.combo_tf1_type.currentText(), self.get_tf_config_from_widgets(self.combo_tf1_type, self.spin_tf1_air_N, self.combo_tf1_air_R, self.tf1_editor)))
+        self.btn_edit_tf1.clicked.connect(
+            lambda: self.open_tf_editor('TF1', self.combo_tf1_type.currentText())
+        )
 
-        # Дистанция старта
+        # L1 to first TF
         hbox_l1 = QHBoxLayout()
         hbox_l1.addWidget(QLabel("Start Dist (m):"))
         self.spin_l1 = QDoubleSpinBox()
@@ -216,7 +264,9 @@ class XRayCalcApp(QMainWindow):
         tf2_layout.addLayout(hbox_tf2_type)
         tf2_layout.addWidget(self.btn_edit_tf2)
 
-        self.btn_edit_tf2.clicked.connect(lambda: self.open_tf_editor('TF2', self.combo_tf2_type.currentText(),self.get_tf_config_from_widgets(self.combo_tf2_type, self.spin_tf2_air_N, self.combo_tf2_air_R, self.tf2_editor)))
+        self.btn_edit_tf2.clicked.connect(
+            lambda: self.open_tf_editor('TF2', self.combo_tf2_type.currentText())
+        )
 
         hbox_l2 = QHBoxLayout()
         hbox_l2.addWidget(QLabel("TF2 Position (m):"))
@@ -242,6 +292,8 @@ class XRayCalcApp(QMainWindow):
         self.spin_tf2_air_N = QSpinBox()
         self.spin_tf2_air_N.setRange(1, 200)
         self.spin_tf2_air_N.setValue(9)
+        #self.spin_tf2_air_N.valueChanged.connect(self.on_tf2_air_n_changed)
+        #self.combo_tf2_air_R.currentTextChanged.connect(self.on_tf2_air_preset_changed) #для air_tf1 тоже
         self.combo_tf2_air_R = QComboBox()
         self.combo_tf2_air_R.addItems(LENS_PRESETS.keys())
         self.combo_tf2_air_R.setCurrentText('R50')
@@ -280,6 +332,22 @@ class XRayCalcApp(QMainWindow):
         for combo, stack, editor, preset in tf_configs:
             self._connect_tf_type_combo(combo, stack, editor, preset)
 
+        # Синхронизация Air-TF
+        self.spin_tf1_air_N.valueChanged.connect(
+            lambda v: self.on_air_n_changed(v, 'TF1', self.spin_tf1_air_N, self.combo_tf1_air_R, 'tf1_air_config')
+        )
+        self.spin_tf2_air_N.valueChanged.connect(
+            lambda v: self.on_air_n_changed(v, 'TF2', self.spin_tf2_air_N, self.combo_tf2_air_R, 'tf2_air_config')
+        )
+
+        # Синхронизация пресета (опционально)
+        self.combo_tf1_air_R.currentTextChanged.connect(
+            lambda p: self.on_air_preset_changed(p, 'TF1', self.combo_tf1_air_R, 'tf1_air_config')
+        )
+        self.combo_tf2_air_R.currentTextChanged.connect(
+            lambda p: self.on_air_preset_changed(p, 'TF2', self.combo_tf2_air_R, 'tf2_air_config')
+        )
+
         # --- ПРАВАЯ ПАНЕЛЬ: РЕЗУЛЬТАТЫ ---
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
@@ -292,7 +360,12 @@ class XRayCalcApp(QMainWindow):
 
         # Таблица истории
         self.table_res = QTableWidget(0, 0)
-        self.table_res.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table_res.verticalHeader().setVisible(False)
+        #self.table_res.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.table_res.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        #self.table_res.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
+
+        self.table_res.setStyleSheet("QTableWidget::item { padding: 2px 40px; }")
 
         # Кнопка настроек колонок
         self.btn_column_settings = QPushButton("Columns...")
@@ -325,12 +398,104 @@ class XRayCalcApp(QMainWindow):
         splitter.addWidget(right_panel)
         splitter.setSizes([400, 800]) # Пропорции
 
+    def update_source_info_label(self):
+        """Обновляет метку с информацией об источнике и оптических константах."""
+        energy = self.source_params['energy']
+        if self.use_fwhm:
+            sx = self.source_params['sx_fwhm']
+            sy = self.source_params['sy_fwhm']
+            wx = self.source_params['wx_fwhm']
+            wy = self.source_params['wy_fwhm']
+            size_label_x = "Source size X, um (FWHM):"
+            size_label_y = "Source size Y, um (FWHM):"
+            div_label_x = "Divergence X, mrad (FWHM):"
+            div_label_y = "Divergence Y, mrad (FWHM):"
+        else:
+            sx = self.source_params['sx_fwhm'] / 2.35482
+            sy = self.source_params['sy_fwhm'] / 2.35482
+            wx = self.source_params['wx_fwhm'] / 2.35482
+            wy = self.source_params['wy_fwhm'] / 2.35482
+            size_label_x = "Source size X, um (Sigma):"
+            size_label_y = "Source size y, um (Sigma):"
+            div_label_x = "Divergence X, mrad (Sigma):"
+            div_label_y = "Divergence Y, mrad (Sigma):"
+
+        text = (
+            f"Energy: {energy:.0f} eV\n"
+            f"{size_label_x} {sx:.2f}\n"
+            f"{size_label_y} {sy:.2f}\n"
+            f"{div_label_x} {wx:.2f}\n"
+            f"{div_label_y} {wy:.2f}"
+        )
+
+        self.lbl_source_info.setText(text)
+
+    def open_source_editor(self):
+        dialog = SourceEditorDialog(
+            self,
+            source_params = self.source_params.copy(),
+            use_fwhm = self.use_fwhm 
+        )
+        if dialog.exec_() == QDialog.Accepted:
+            new_params = dialog.get_params()
+            self.use_fwhm = dialog.get_use_fwhm()  # ← сохраняйте новое состояние
+            self.source_params.update(new_params)  # ← new_params — всегда в FWHM!
+            # Обновляем поле энергии в основном окне для синхронизации
+            #self.inp_energy.setText(str(int(new_params['energy'])))
+            self.update_energy_input()
+            self.update_source_info_label()
+    
+    def on_energy_input_changed(self):
+        try:
+            energy = float(self.inp_energy.text())
+            self.source_params['energy'] = energy
+            self.update_source_info_label()  # обновляем оптические константы
+        except ValueError:
+            # Если введено не число — возвращаем последнее валидное значение
+            self.update_energy_input()
+    
+    def update_energy_input(self):
+        """Обновляет поле ввода энергии из self.source_params."""
+        self.inp_energy.setText(f"{self.source_params['energy']:.0f}")
+
     def _on_tf_type_changed(self, stack_widget, editor_widget, idx, default_preset='R500'):
         stack_widget.setCurrentIndex(idx)
         if idx == 1:  # Vacuum
             while editor_widget.table.rowCount() > 0:
                 editor_widget.remove_row()
             editor_widget.add_row(1, default_preset)
+
+    def on_air_n_changed(self, value, tf_name, n_spin, preset_combo, config_attr):
+        """
+        Универсальный обработчик изменения Count (N) для Air-TF.
+        
+        Args:
+            value: новое значение N
+            tf_name: имя TF ('TF1' или 'TF2')
+            n_spin: QSpinBox с Count (N)
+            preset_combo: QComboBox с пресетом
+            config_attr: имя атрибута конфигурации ('tf1_air_config' или 'tf2_air_config')
+        """
+        # Проверяем, что текущий тип TF — Air
+        combo_type = self.combo_tf1_type if tf_name == 'TF1' else self.combo_tf2_type
+        if combo_type.currentText() != "Air (Array)":
+            return
+        
+        preset = preset_combo.currentText()
+        current_config = getattr(self, config_attr)
+        
+        # Сохраняем active-состояния существующих линз
+        active_states = [lens.get('active', True) for lens in current_config]
+        
+        # Обрезаем или дополняем список
+        if value <= len(active_states):
+            active_states = active_states[:value]
+        else:
+            active_states.extend([True] * (value - len(active_states)))
+        
+        # Обновляем конфигурацию
+        new_config = [{'preset': preset, 'active': active} for active in active_states]
+        setattr(self, config_attr, new_config)
 
     def _connect_tf_type_combo(self, combo_widget, stack_widget, editor_widget, default_preset):
         combo_widget.currentIndexChanged.connect(
@@ -360,7 +525,7 @@ class XRayCalcApp(QMainWindow):
             lambda idx: self._on_tf_type_changed(stack_widget, editor_widget, idx, default_preset)
         )
     '''
-    def _calculate_tf_length(self, tf_type, config_data):
+    def _calculate_tf_length(self, tf_type, config_data): #вынести длины в отдельные переменные в parameters_micro1 (переименовать в scheme_parameters)
         """Вычисляет физическую длину трансфокатора (в метрах)."""
         p = self.controller.defaults['p']
         u_vac = self.controller.defaults['u_vac']
@@ -369,7 +534,7 @@ class XRayCalcApp(QMainWindow):
         total_length = 0.0
 
         if tf_type == 'air':
-            N = config_data['lens_count']
+            #N = config_data['lens_count']
             total_length = 0.1396
         else:  # vacuum
             total_length = 0.153 #if dist between groups = 0.001
@@ -415,8 +580,21 @@ class XRayCalcApp(QMainWindow):
                 'groups': vacuum_groups
             }   
             
-    def open_tf_editor(self, name, tf_type, config):
+    def open_tf_editor(self, name, tf_type):
         is_air = (tf_type == "Air (Array)")
+        
+        # Выбираем, какую конфигурацию передавать
+        if name == "TF1":
+            if is_air:
+                config = self.tf1_air_config
+            else:
+                config = self.tf1_editor.get_config()
+        else:  # TF2
+            if is_air:
+                config = self.tf2_air_config
+            else:
+                config = self.tf2_editor.get_config()
+
         dialog = TFEditorDialog(
             self, 
             tf_type='air' if is_air else 'vacuum',
@@ -425,10 +603,23 @@ class XRayCalcApp(QMainWindow):
         )
         if dialog.exec_() == QDialog.Accepted:
             new_config = dialog.get_config()
-            # Обновите данные в основном GUI
+            # Сохраняем внутреннюю конфигурацию
             if name == "TF1":
-                self._update_tf1_from_editor(new_config, is_air)
-            # ... аналогично для TF2
+                if is_air:
+                    self.tf1_air_config = new_config
+                else:
+                    # Для vacuum — просто обновим таблицу (по желанию)
+                    self.tf1_editor.table.setRowCount(0)
+                    for block in new_config:
+                        self.tf1_editor.add_row(n_val=block['N'], preset=block['preset'])
+                        # Примечание: active не обновляется — можно доработать позже
+            else:  # TF2
+                if is_air:
+                    self.tf2_air_config = new_config
+                else:
+                    self.tf2_editor.table.setRowCount(0)
+                    for block in new_config:
+                        self.tf2_editor.add_row(n_val=block['N'], preset=block['preset'])
 
     def _update_tf1_from_editor(self, config, is_air):
         if is_air:
@@ -443,10 +634,118 @@ class XRayCalcApp(QMainWindow):
                 self.tf1_editor.add_row(n_val=block['N'], preset=block['preset'])
                 # Обновить чекбокс 'active' — потребует доработки LensGroupEditor
 
+    def on_air_preset_changed(self, preset, tf_name, preset_combo, config_attr):
+        """Универсальный обработчик изменения пресета для Air-TF."""
+        combo_type = self.combo_tf1_type if tf_name == 'TF1' else self.combo_tf2_type
+        if combo_type.currentText() != "Air (Array)":
+            return
+        
+        config = getattr(self, config_attr)
+        for lens in config:
+            lens['preset'] = preset
+
+
+    def run_calculation(self):
+        calc_params = self.source_params.copy()
+        energy = float(self.source_params['energy'])
+
+        structure_config = []
+
+        # --- TF1 ---
+        tf1_is_air = (self.combo_tf1_type.currentText() == "Air (Array)")
+        l1_input = self.spin_l1.value()
+
+        # Длина TF1
+        if tf1_is_air:
+            tf1_length = self._calculate_tf_length('air', None)
+            lenses = self.tf1_air_config
+        else:
+            tf1_length = self._calculate_tf_length('vacuum', {'groups': self.tf1_editor.get_config()})
+            lenses = None
+
+        # Позиция
+        if self.chk_l1_center.isChecked():
+            absolute_start = l1_input - tf1_length / 2
+        else:
+            absolute_start = l1_input
+
+        # Конфиг
+        if tf1_is_air:
+            tf1_config = {
+                'type': 'air',
+                'tf_name': 'TF1',
+                'absolute_start': absolute_start,
+                'lenses': self.tf1_air_config
+            }
+        else:
+            tf1_config = {
+                'type': 'vacuum',
+                'tf_name': 'TF1',
+                'absolute_start': absolute_start,
+                'groups': self.tf1_editor.get_config()
+            }
+        structure_config.append(tf1_config)
+        tf1_end = absolute_start + tf1_length
+
+        # --- TF2 ---
+        if self.gb_tf2.isChecked():
+            tf2_is_air = (self.combo_tf2_type.currentText() == "Air (Array)")
+            l2_input = self.l2_input.value()
+
+            if tf2_is_air:
+                tf2_length = self._calculate_tf_length('air', None)
+            else:
+                tf2_length = self._calculate_tf_length('vacuum', {'groups': self.tf2_editor.get_config()})
+
+            if self.chk_gap_center.isChecked():
+                absolute_start = l2_input - tf2_length / 2
+            else:
+                absolute_start = l2_input
+
+            if tf2_is_air:
+                tf2_config = {
+                    'type': 'air',
+                    'tf_name': 'TF2',
+                    'absolute_start': absolute_start,
+                    'lenses': self.tf2_air_config
+                }
+            else:
+                tf2_config = {
+                    'type': 'vacuum',
+                    'tf_name': 'TF2',
+                    'absolute_start': absolute_start,
+                    'groups': self.tf2_editor.get_config()
+                }
+            structure_config.append(tf2_config)
+
+        if not self.use_fwhm:  # т.е. используется Sigma
+            calc_params['sx_fwhm'] = self.source_params['sx_fwhm'] / 2.35482
+            calc_params['sy_fwhm'] = self.source_params['sy_fwhm'] / 2.35482
+            calc_params['wx_fwhm'] = self.source_params['wx_fwhm'] / 2.35482
+            calc_params['wy_fwhm'] = self.source_params['wy_fwhm'] / 2.35482
+
+        # Расчёт
+        try:
+            # Передаём КОПИЮ source_params, чтобы контроллер не мог его изменить
+            report = self.controller.run_calculations(
+                energy, 
+                structure_config, 
+                source_params=calc_params  # ← безопасно
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Calculation Error", str(e))
+            import traceback
+            traceback.print_exc()
+            return
+
+        self.display_results(report)
+
+    
+    '''
     def run_calculation(self):
         # 1. Считываем энергию
         try:
-            energy = float(self.inp_energy.text())
+            energy = self.source_params['energy']
         except ValueError:
             QMessageBox.critical(self, "Error", "Invalid Energy value")
             return
@@ -459,8 +758,7 @@ class XRayCalcApp(QMainWindow):
 
         if tf1_is_air:
             tf1_config_data = {
-                'lens_count': self.spin_tf1_air_N.value(),
-                'preset': self.combo_tf1_air_R.currentText()
+                'lenses': self.tf1_air_config
             }
             """
             N = self.spin_tf1_air_N.value()
@@ -502,11 +800,12 @@ class XRayCalcApp(QMainWindow):
 
         # Теперь передаём start_dist в structure_config
         if tf1_is_air:
-            tf1_config = self._build_tf_config(
-                'TF1', True, absolute_start,
-                air_n = self.spin_tf1_air_N.value(),
-                air_preset = self.combo_tf1_air_R.currentText()
-            )
+            tf1_config = {
+                'type': 'air',
+                'tf_name': 'TF2',
+                'absolute_start': absolute_start,
+                'lenses': self.tf1_air_config  # ← список словарей с 'active'
+            }
         else:
             tf1_config = self._build_tf_config(
                 'TF1', False, absolute_start,
@@ -524,9 +823,8 @@ class XRayCalcApp(QMainWindow):
 
             if tf2_is_air:
                 tf2_config_data = {
-                    'lens_count': self.spin_tf2_air_N.value(),
-                    'preset': self.combo_tf2_air_R.currentText()
-                    }
+                    'lenses': self.tf2_air_config
+                }
             else:
                 tf2_config_data = {
                     'groups': self.tf2_editor.get_config()
@@ -545,11 +843,12 @@ class XRayCalcApp(QMainWindow):
 
         # Теперь передаём start_dist в structure_config
         if tf2_is_air:
-            tf2_config = self._build_tf_config(
-                'TF2', True, absolute_start,
-                air_n = self.spin_tf2_air_N.value(),
-                air_preset = self.combo_tf2_air_R.currentText()
-            )
+            tf2_config = {
+                'type': 'air',
+                'tf_name': 'TF2',
+                'absolute_start': absolute_start,
+                'lenses': self.tf2_air_config  # ← список словарей с 'active'
+            }
         else:
             tf2_config = self._build_tf_config(
                 'TF2', False, absolute_start,
@@ -560,7 +859,7 @@ class XRayCalcApp(QMainWindow):
 
         # 4. Запуск расчета через расширенный контроллер
         try:
-            report = self.controller.run_calculations(energy, structure_config)
+            report = self.controller.run_calculations(energy, structure_config, source_params=self.source_params.copy())
         except Exception as e:
             QMessageBox.critical(self, "Calculation Error", str(e))
             # Для отладки можно распечатать traceback
@@ -573,6 +872,7 @@ class XRayCalcApp(QMainWindow):
         #print(f"Start dist = {start_dist:.6f} m")
         self.display_results(report)
         #print("Defaults:", self.controller.defaults)
+    '''
 
     def display_results(self, report):
         self._last_report = report
@@ -580,14 +880,17 @@ class XRayCalcApp(QMainWindow):
             self.txt_summary.setText("No results or error occurred.")
             return
 
+        focus_pos = report['final_pos'] + report['L2']
         # Текст
         summary = (
             f"<b>Energy:</b> {report['energy']} eV<br>"
             f"<b>Final Position:</b> {report['final_pos']:.4f} m<br>"
             f"<b>Focal Distance (L2) from last lens:</b> {report['L2']:.4f} m<br>"
+            f"<b>Focus position:</b> {focus_pos:.4f} m<br>"
             f"<b>Transmission:</b> {report['T']*100:.2f} %<br>"
             f"<b>Focus Size X:</b> {report['size_x']*1e6:.2f} um<br>"
             f"<b>Focus Size Y:</b> {report['size_y']*1e6:.2f} um<br>"
+            #Gain, DoF, Symmetry Size
         )
         self.txt_summary.setHtml(summary)
         history = report.get('full_history', [])
@@ -597,15 +900,27 @@ class XRayCalcApp(QMainWindow):
 
         display_rows = []
         n = len(history)
+
+        # Внутри цикла по history:
         for i, item in enumerate(history):
             display_rows.append(item)
-            is_last_in_block = (i == n - 1) or (item.block_index != history[i + 1].block_index)
-            is_last_in_tf = (i == n - 1) or (item.tf_name != history[i + 1].tf_name)
-            if is_last_in_block and not is_last_in_tf:
-                display_rows.append(f"Block {history[i + 1].block_index}")
-            elif is_last_in_tf and i < n - 1:
-                display_rows.append(f"{history[i + 1].tf_name}")
 
+            # Проверяем флаги напрямую
+            is_last_in_block = getattr(item, 'is_last_in_block', False)
+            is_last_in_tf = getattr(item, 'is_last_in_tf', False)
+
+            # После последней линзы в блоке (но не последней в TF) — вставляем заголовок следующего блока
+            if is_last_in_block and not is_last_in_tf and i + 1 < len(history):
+                next_block_index = getattr(history[i + 1], 'block_index', None)
+                if next_block_index is not None:
+                    display_rows.append(f"Block {next_block_index}")
+
+            # После последней линзы в TF — если есть следующий TF, вставляем его имя
+            if is_last_in_tf and i + 1 < len(history):
+                next_tf_name = getattr(history[i + 1], 'tf_name', None)
+                if next_tf_name:
+                    display_rows.append(next_tf_name)
+        
         self.table_res.setRowCount(len(display_rows))
         for row, item in enumerate(display_rows):
             if isinstance(item, str):
@@ -629,8 +944,7 @@ class XRayCalcApp(QMainWindow):
                         # Резервный форматтер
                         text = str(value)
 
-                    self.table_res.setItem(row, col, QTableWidgetItem(text))
-                    
+                    self.table_res.setItem(row, col, QTableWidgetItem(text))            
 
     def open_column_settings(self):
         # Все возможные поля (из LENS_RESULT_FIELDS)
@@ -666,7 +980,16 @@ class XRayCalcApp(QMainWindow):
         headers = [field[2] for field in self.current_display_fields]
         self.table_res.setColumnCount(len(headers))
         self.table_res.setHorizontalHeaderLabels(headers)
-        self.table_res.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        #self.table_res.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.table_res.setStyleSheet("QTableWidget::item { padding: 2px 4px; }")
+
+        header = self.table_res.horizontalHeader()
+        for col, field in enumerate(self.current_display_fields):
+            field_name = field[0]
+            width = 100#self.COLUMN_WIDTHS.get(field_name, 100)  # 100 — значение по умолчанию
+            self.table_res.setColumnWidth(col, width)
+            # Важно: отключаем изменение размера пользователем (опционально)
+            header.setSectionResizeMode(col, QHeaderView.Fixed)
         
         if hasattr(self, '_last_report'):
             self.display_results(self._last_report)
@@ -683,78 +1006,3 @@ if __name__ == '__main__':
     window = XRayCalcApp()
     window.show()
     sys.exit(app.exec_())
-
-'''
-        if not report or "Error" in report:
-            self.txt_summary.setText("No results or error occurred.")
-            return
-
-        # Текст
-        summary = (
-            f"<b>Energy:</b> {report['energy']} eV<br>"
-            f"<b>Final Position:</b> {report['final_pos']:.4f} m<br>"
-            f"<b>Focal Distance (L2):</b> {report['L2']:.4f} m<br>"
-            f"<b>Transmission:</b> {report['T']*100:.4f} %<br>"
-            f"<b>Spot Size X:</b> {report['size_x']*1e6:.2f} um<br>"
-            f"<b>Spot Size Y:</b> {report['size_y']*1e6:.2f} um<br>"
-        )
-        self.txt_summary.setHtml(summary)
-
-        # Таблица
-        history = report.get('full_history', [])
-        if not history:
-            return
-        
-        display_rows = []
-        for item in history:
-            display_rows.append(item)
-            if item.next_header:  # не пустая строка
-                display_rows.append(item.next_header)  # строка-заголовок
-
-        self.table_res.setRowCount(len(display_rows))
-        
-
-        for row, item in enumerate(display_rows):
-            if isinstance(item, str):
-                # Это строка-заголовок
-                self.table_res.setItem(row, 0, QTableWidgetItem(item))
-                for col in range(1, self.table_res.columnCount()):
-                    self.table_res.setItem(row, col, QTableWidgetItem(""))
-                # Опционально: жирный шрифт
-                font = self.table_res.item(row, 0).font()
-                font.setBold(True)
-                self.table_res.item(row, 0).setFont(font)
-            else:
-                # Обычная линза
-                for col, (field_name, _, formatter) in enumerate(DISPLAY_FIELDS):
-                    value = getattr(item, field_name)
-                    text = formatter(value)
-                    self.table_res.setItem(row, col, QTableWidgetItem(text))
-
-
-
-
-        history = report.get('full_history', [])
-        if not history:
-            return
-        display_rows = []
-        for item in history:
-            display_rows.append(item)
-            # Пустая строка после каждого блока
-            if item.is_last_in_block:
-                display_rows.append(None)  # маркер разделителя
-
-        self.table_res.setRowCount(len(display_rows))
-        
-
-        for row, item in enumerate(history):
-            if item is None:
-                # Пустая строка
-                for col in range(self.table_res.columnCount()):
-                    self.table_res.setItem(row, col, QTableWidgetItem(""))
-            else:
-                for col, (field_name, _, _, formatter) in enumerate(LENS_RESULT_FIELDS):
-                    value = getattr(item, field_name)
-                    formatted = formatter(value)
-                    self.table_res.setItem(row, col, QTableWidgetItem(formatted))
-'''

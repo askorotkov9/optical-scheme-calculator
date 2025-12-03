@@ -1,4 +1,6 @@
-#_________________
+from xraydb import xray_delta_beta, get_material
+
+
 #Параметры линз
 LENS_PRESETS = {
     'R50': {'R': 50E-6, 'A': 440E-6},
@@ -26,13 +28,18 @@ MATERIAL_DATA_BE = {
 
 class SourceManager:
     """Управляет параметрами источника и пересчётом энергии"""
-    def __init__(self, energy = 10300):
-        #Базовые параметры пучка
-        self.sx_base = 32.9E-6 #сдлеать возможность выбора в чём считать: в FWHM или sigma. Также в статье с формулами
-        self.sy_base = 5.9E-6
-        self.wx_base = 9.4E-6*2.35482 #15 гармоника
-        self.wy_base = 11.0E-6*2.35482 #15 гармоника
+    def __init__(self, energy = 10300, sx_fwhm = 32.84*2.35482, sy_fwhm = 5.9*2.35482, wx_fwhm = 9.4*2.35482, wy_fwhm = 11.0*2.35482, material = 'Be'):
+        ''' 
+        Базовые параметры пучка, размеры на входе в мкм, хранение в м
+        '''
+        self.sx_base = sx_fwhm * 1e-6# / 2.35482 # FWHM → метры
+        self.sy_base = sy_fwhm * 1e-6# / 2.35482
+        self.wx_base = wx_fwhm * 1e-6# / 2.35482  # мкрад → радианы
+        self.wy_base = wy_fwhm * 1e-6# / 2.35482
+        self.material = material
         self.fwhm_conv = 2.35482
+        self.set_energy(energy)
+
         ''' 
         #5 гармоника
         E = 10300
@@ -51,30 +58,31 @@ class SourceManager:
         w0y= 10.0E-6*2.35482
         '''
 
-        self.set_energy(energy)
-
     def set_energy(self, energy):
         """Обновляет физические параметры при смене энергии."""
         self.E = energy
         self.lamda = (12398.4 / self.E) * 1e-10
 
-        #Здесь логика выбора оптических констант.
-        #В будущем сюда подключить xraylib.calc_delta(Z, E)
-
-        if 10000 <= self.E < 20000:
-            ref = MATERIAL_DATA_BE['10300']
+        mat_obj = get_material(self.material)
+        if mat_obj is not None and hasattr(mat_obj, 'density'):
+            density = mat_obj.density
         else:
-            ref = MATERIAL_DATA_BE['30900']
+            # fallback плотности для Be, Al и т.д.
+            fallback = {"Be": 1.848, "Al": 2.7, "Si": 2.33, "Ni": 8.9}
+            density = fallback.get(self.material, 1.848)
 
-        self.delta = ref['delta']
-        self.betta = ref['betta']
-        self.mu = ref['mu']
+        result = xray_delta_beta(self.material, density, self.E)
+        self.delta, self.betta, self.atlen = result[0], result[1], result[2]
+        result = xray_delta_beta(self.material, density, self.E)
+
+        self.mu = 1.0 / (self.atlen * 1e-2)
+
 
     def get_params_dict(self):
         """Возвращает словарь, совместимый со старым кодом"""
         return {
-            'sx': self.sx_base * self.fwhm_conv,
-            'sy': self.sy_base * self.fwhm_conv,
+            'sx': self.sx_base,
+            'sy': self.sy_base,
             'w0x': self.wx_base,
             'w0y': self.wy_base,
             'E': self.E,
@@ -118,46 +126,3 @@ class LensGenerator:
             })
 
         return lens_config
-
-
-# --- 3. Инициализация по умолчанию (для совместимости) ---
-
-# Создаем глобальный объект источника
-current_source = SourceManager(energy=30900) #?? через 
-
-# Вместо 10 одинаковых словарей tf1_1...tf1_10, мы можем создавать их на лету.
-
-#Подумать над этим блоком
-def calculate_layout(tf1_config, tf2_config):
-    """Рассчитывает геометрию системы на основе конфигов линз."""
-    tf1_len = tf1_config['p'] * tf1_config['N'] + tf1_config['u'] * (tf1_config['N'] - 1) #0.244, u = 0.008
-    tf2_len = tf2_config['p'] * tf2_config['N'] + tf2_config['u'] * (tf2_config['N'] - 1) #0.27, u = 0.01, Оба на 60 линз всего, блоков 14
-    
-    init_L1 = 27 - tf1_len / 2 #изменить 27 на input_L1, сделать switch на отсчёт от первой линзы, либо середины tf
-    # И так далее...
-    return init_L1, tf1_len, tf2_len
-
-
-
-# Но если тебе нужно сохранить структуру для старого кода:
-
-tf1_template = LensGenerator.create_lens_group('R500', N=1, source_manager=current_source)
-
-# Пример создания tf2
-tf2 = LensGenerator.create_lens_group(
-    'R50', 
-    N=63, 
-    u=400e-6, 
-    source_manager=current_source
-)
-
-
-
-
-'''
-tf1_length = (init_tf['p'] * init_tf['N'] + init_tf['u'] * (init_tf['N'] - 1))
-tf2_length = tf2['p'] * tf2['N'] + tf2['u'] * (tf2['N'] - 1)
-initial_L1 = 27 - tf1_length/2 # по середину TF1
-#print(initial_L1)
-L_between = 37 - (tf1_length)/2 - tf2_length/2 + init_tf['p'] #(tf2['p'] * tf2['N'] + tf2['u'] * (tf2['N'] - 1))/2
-'''
