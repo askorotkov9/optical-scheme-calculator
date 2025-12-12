@@ -20,7 +20,7 @@ class SourceEditorDialog(QDialog):
             'wx_fwhm': 9.4,
             'wy_fwhm': 11.0,
             #'use_fwhm': True,
-            'material': 'Be'
+            #'material': 'Be'
         }
         self.original_params = source_params if source_params is not None else default_params
         
@@ -37,7 +37,7 @@ class SourceEditorDialog(QDialog):
         layout = QVBoxLayout(self)
 
         # --- Энергия и материал ---
-        gb_energy = QGroupBox("Photon Energy & Material")
+        gb_energy = QGroupBox("Photon Energy")
         fl_energy = QFormLayout()
         
         self.spin_energy = QDoubleSpinBox()
@@ -46,9 +46,9 @@ class SourceEditorDialog(QDialog):
         self.spin_energy.setSuffix(" eV")
         fl_energy.addRow("Energy:", self.spin_energy)
         
-        self.combo_material = QComboBox()
-        self.combo_material.addItems(["Be", "Al", "Si", "Ni"])
-        fl_energy.addRow("Lens Material:", self.combo_material)
+        #self.combo_material = QComboBox()
+        #self.combo_material.addItems(["Be", "Al", "Si", "Ni"])
+        #fl_energy.addRow("Lens Material:", self.combo_material)
         
         gb_energy.setLayout(fl_energy)
         layout.addWidget(gb_energy)
@@ -92,6 +92,7 @@ class SourceEditorDialog(QDialog):
         gb_div.setLayout(fl_div)
         layout.addWidget(gb_div)
 
+        """
         # --- Оптические константы (только для просмотра) ---
         gb_optical = QGroupBox("Optical Constants (from xraydb)")
         fl_optical = QFormLayout()
@@ -103,6 +104,7 @@ class SourceEditorDialog(QDialog):
         fl_optical.addRow(self.lbl_mu)
         gb_optical.setLayout(fl_optical)
         layout.addWidget(gb_optical)
+        """
 
         # --- Кнопки ---
         btn_layout = QHBoxLayout()
@@ -122,9 +124,8 @@ class SourceEditorDialog(QDialog):
         self.spin_wx.valueChanged.connect(self.update_internal_state)
         self.spin_wy.valueChanged.connect(self.update_internal_state)
         self.chk_use_fwhm.toggled.connect(self.on_use_fwhm_toggled)
-        #self.chk_use_fwhm.toggled.connect(self.on_units_changed)
         self.spin_energy.valueChanged.connect(self.update_optical_constants)
-        self.combo_material.currentTextChanged.connect(self.update_optical_constants)
+        #self.combo_material.currentTextChanged.connect(self.update_optical_constants)
         self.btn_reset.clicked.connect(self.load_params)
         self.btn_ok.clicked.connect(self.accept)
         self.btn_cancel.clicked.connect(self.reject)
@@ -138,16 +139,17 @@ class SourceEditorDialog(QDialog):
         #self.spin_wx.valueChanged.connect(self._on_wx_changed)
         #self.spin_wy.valueChanged.connect(self._on_wy_changed)
 
-        self.update_optical_constants()
+        #self.update_optical_constants()
+        #self.on_energy_changed()
 
     def load_params(self):
-        print("Loading params...")
-        print("original_params:", self.original_params)
-        print("use_fwhm:", self.use_fwhm)
+        #print("Loading params...")
+        #print("original_params:", self.original_params)
+        #print("use_fwhm:", self.use_fwhm)
 
         p = self.original_params
         self.spin_energy.setValue(p['energy'])
-        self.combo_material.setCurrentText(p['material'])
+        #self.combo_material.setCurrentText(p['material'])
         
         # Восстанавливаем внутренние значения (всегда FWHM)
         self._sx_fwhm = p['sx_fwhm']
@@ -164,9 +166,6 @@ class SourceEditorDialog(QDialog):
         
         # Устанавливаем состояние чекбокса
         self.chk_use_fwhm.setChecked(self.use_fwhm)
-
-        print('sss', self._sx_fwhm)
-        
         
         # Обновляем отображение
         if self.use_fwhm:
@@ -212,27 +211,27 @@ class SourceEditorDialog(QDialog):
         factor = 1.0 if is_fwhm else 2.35482
     
         sx_val = self.spin_sx.value()
-        print(f"update_internal_state: is_fwhm={is_fwhm}, spin_sx={sx_val}")
+        #print(f"update_internal_state: is_fwhm={is_fwhm}, spin_sx={sx_val}")
         if is_fwhm:
             self._sx_fwhm = sx_val
         else:
             self._sx_fwhm = sx_val * 2.35482
-        print(f"  -> _sx_fwhm = {self._sx_fwhm}")
+        #print(f"  -> _sx_fwhm = {self._sx_fwhm}")
 
         self._sx_fwhm = self.spin_sx.value() * factor
         self._sy_fwhm = self.spin_sy.value() * factor
         self._wx_fwhm = self.spin_wx.value() * factor
         self._wy_fwhm = self.spin_wy.value() * factor
 
-        sx_fwhm = self.inp_sx.value() * factor# if is_fwhm else self.inp_sx.value() * 2.35482
-        sy_fwhm = self.inp_sy.value() * factor# if is_fwhm else self.inp_sy.value() * 2.35482
-        wx_fwhm = self.inp_wx.value() * factor# if is_fwhm else self.inp_wx.value() * 2.35482
-        wy_fwhm = self.inp_wy.value() * factor# if is_fwhm else self.inp_wy.value() * 2.3548
+        #sx_fwhm = self.inp_sx.value() * factor# if is_fwhm else self.inp_sx.value() * 2.35482
+        #sy_fwhm = self.inp_sy.value() * factor# if is_fwhm else self.inp_sy.value() * 2.35482
+        #wx_fwhm = self.inp_wx.value() * factor# if is_fwhm else self.inp_wx.value() * 2.35482
+        #wy_fwhm = self.inp_wy.value() * factor# if is_fwhm else self.inp_wy.value() * 2.3548
 
     def on_use_fwhm_toggled(self, checked):
         """Вызывается при переключении чекбокса."""
         # 1. Зафиксируем текущие значения как FWHM
-        print(f"on_use_fwhm_toggled: checked={checked}")
+        #print(f"on_use_fwhm_toggled: checked={checked}")
         #self.update_internal_state()
         # 2. Переключим отображение
         factor = 1.0 if checked else (1/2.35482)
@@ -295,10 +294,12 @@ class SourceEditorDialog(QDialog):
         self.inp_sy.setValue(sy_fwhm)
         self.inp_wx.setValue(wx_fwhm)
         self.inp_wy.setValue(wy_fwhm)
+    
     '''
 
-
     def update_optical_constants(self):
+        pass
+        '''
         try:
             energy_ev = self.spin_energy.value()
             material = self.combo_material.currentText()
@@ -314,15 +315,16 @@ class SourceEditorDialog(QDialog):
             atlen_m = atlen_cm * 0.01
             mu_inv_m = 1.0 / atlen_m
 
-            self.lbl_delta.setText(f"delta: {delta:.2e}")
-            self.lbl_betta.setText(f"betta: {beta:.2e}")
-            self.lbl_mu.setText(f"mu (1/m): {mu_inv_m:.2e}")
+            #self.lbl_delta.setText(f"delta: {delta:.2e}")
+            #self.lbl_betta.setText(f"betta: {beta:.2e}")
+            #self.lbl_mu.setText(f"mu (1/m): {mu_inv_m:.2e}")
 
         except Exception as e:
             print(f"Error in update_optical_constants: {e}")
-            self.lbl_delta.setText("delta: Error")
-            self.lbl_betta.setText("betta: Error")
-            self.lbl_mu.setText("mu: Error")
+            #self.lbl_delta.setText("delta: Error")
+            #self.lbl_betta.setText("betta: Error")
+            #self.lbl_mu.setText("mu: Error")
+        '''
     '''
     def get_params(self):
         use_fwhm = self.chk_use_fwhm.isChecked()
@@ -357,7 +359,7 @@ class SourceEditorDialog(QDialog):
             'sy_fwhm': self._sy_fwhm,
             'wx_fwhm': self._wx_fwhm,
             'wy_fwhm': self._wy_fwhm,
-            'material': self.combo_material.currentText()
+            #'material': self.combo_material.currentText()
         }
     
     def get_use_fwhm(self):

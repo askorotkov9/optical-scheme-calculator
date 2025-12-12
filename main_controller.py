@@ -1,6 +1,6 @@
 import math
 from computations import Calculator, Formulas
-from parameters_micro1 import SourceManager, LensGenerator
+from parameters_micro1 import SourceManager, LensGenerator, LENS_PRESETS
 #Destop (для компа на SL) и веб-версия калькулятора, tkinter/PyQt5/PyQt6
 
 
@@ -27,63 +27,78 @@ class AdvancedController:
 
     
     def _build_vacuum_tf(self, source_mgr, groups_data, first_dist, tf_name="Vacuum"):
-        """
-        Собирает вакуумный TF с физическим удалением неактивных блоков и линз.
-        groups_data: список групп [{'N': int, 'preset': str, 'active': bool, 'lenses': [...]}, ...]
-        first_dist: расстояние от источника до начала ПЕРВОГО блока (даже если он неактивен!)
-        """
         if not groups_data:
             return []
 
-        p = self.defaults['p']
+        p = self.defaults['p']  # 1e-3 = 1 мм
         u_vac = self.defaults['u_vac']
         block_length = 0.01  # 10 мм
         inter_block_gap = self.defaults.get('inter_block_gap', 0.001)
 
-        # 1. Строим полную геометрию: позиции ВСЕХ линз во ВСЕХ блоках
-        all_lenses = []  # список: (preset, active, absolute_position)
-
-        current_block_start = first_dist
+        # === 1. РАССТАНОВКА БЛОКОВ ===
+        block_positions = []
+        current_pos = first_dist
 
         for group_idx, group in enumerate(groups_data):
-            # Пропускаем блок только для геометрии? → НЕТ! Даже неактивный блок занимает место.
-            # Поэтому всегда обрабатываем геометрию блока.
+            n_lenses = min(group['N'], 5)  # максимум 5 линз
 
-            n_lenses = group['N']
-            #print(f"Block {group_idx+1}, N={n_lenses}")
-            #for lens_idx in range(n_lenses):
-            #    print(f"  lens_idx={lens_idx}, lens_index_in_block={lens_idx+1}")
+            if group_idx == 0:
+                block_start = current_pos
+            else:
+                # Зазор между блоками (пока фиксированный)
+                # Если хотите, можно сделать: gap = base - factor * (N_prev + N_curr)
+                # Но по вашему примеру: 1 мм между стенками
+                gap = 0.001  # 1 мм
+                block_start = current_pos + gap
+
+            block_end = block_start + block_length
+            block_center = block_start + block_length / 2.0
+
+            block_positions.append({
+                'start': block_start,
+                'end': block_end,
+                'center': block_center,
+                'n_lenses': n_lenses
+            })
+
+            current_pos = block_end
+
+        # === 2. РАЗМЕЩЕНИЕ ЛИНЗ ВНУТРИ БЛОКОВ ===
+        all_lenses = []
+
+        for group_idx, (group, block_pos) in enumerate(zip(groups_data, block_positions)):
+            n_lenses = block_pos['n_lenses']
+            block_start = block_pos['start']
+
             if n_lenses * p > block_length:
                 raise ValueError(f"Block {group_idx+1}: {n_lenses} lenses don't fit in 10 mm block")
 
-            free_space = block_length - n_lenses * p
-            offset_left = free_space / 2.0
+            # === Стенки по бокам ===
+            total_lens_width = n_lenses * p
+            free_space = block_length - total_lens_width
+            wall_thickness = free_space / 2.0
 
-            # Получаем список линз в блоке
-            if 'lenses' in group and len(group['lenses']) == n_lenses:
-                # Используем детальную конфигурацию
-                block_lenses = group['lenses']
-            else:
-                # fallback: все линзы как в группе
-                block_lenses = [{'preset': group['preset'], 'active': group.get('active', True)} for _ in range(n_lenses)]
-
-            # Позиции линз внутри блока
+            # === Позиции линз внутри блока ===
             for lens_idx in range(n_lenses):
-                pos_in_block = offset_left + (lens_idx + 0.5) * p
-                abs_pos = current_block_start + pos_in_block
-                lens_info = block_lenses[lens_idx]
+                pos_in_block = wall_thickness + (lens_idx + 0.5) * p
+                abs_pos = block_start + pos_in_block
+
+                # Получаем preset и active
+                if 'lenses' in group and group['lenses'] is not None and len(group['lenses']) == n_lenses:
+                    lens_info = group['lenses'][lens_idx]
+                else:
+                    lens_info = {'preset': group['preset'], 'active': group.get('active', True)}
+
                 all_lenses.append({
                     'preset': lens_info['preset'],
                     'active': lens_info.get('active', True),
                     'abs_pos': abs_pos,
                     'block_index': group_idx + 1,
-                    'lens_index_in_block': lens_idx + 1
+                    'lens_index_in_block': lens_idx + 1,
+                    'material': lens_info.get('material', LENS_PRESETS[lens_info['preset']]['material'])
                 })
 
-            # Переход к следующему блоку
-            current_block_start += block_length + inter_block_gap
-
-        # 2. Собираем цепочку только из активных линз
+        # === 3. СОЗДАНИЕ ЦЕПОЧКИ ===
         chain = []
         prev_active_pos = 0.0
         first_active_found = False
@@ -97,7 +112,8 @@ class AdvancedController:
                 N=1,
                 p=p,
                 u=u_vac,
-                source_manager=source_mgr
+                source_manager=source_mgr,
+                material = lens_geom.get('material')
             )
 
             if not first_active_found:
@@ -108,14 +124,13 @@ class AdvancedController:
                 lens['distance_from_prev'] = lens_geom['abs_pos'] - prev_active_pos
                 prev_active_pos = lens_geom['abs_pos']
 
-            # Метаданные
             lens['tf_name'] = tf_name
             lens['block_index'] = lens_geom['block_index']
             lens['lens_index_in_tf'] = len(chain) + 1
             lens['lens_index_in_block'] = lens_geom['lens_index_in_block']
             lens['is_first_in_tf'] = (len(chain) == 0)
             lens['is_last_in_block'] = (lens_geom['lens_index_in_block'] == groups_data[lens_geom['block_index'] - 1]['N'])
-            lens['is_last_in_tf'] = False  # обновим позже
+            lens['is_last_in_tf'] = False
 
             chain.append(lens)
 
@@ -155,12 +170,14 @@ class AdvancedController:
                 continue  # пропускаем неактивную
 
             preset = lens_info.get('preset', 'R50')
+            material = lens_info.get('material')
             lens = LensGenerator.create_lens_group(
                 preset,
                 N=1,
                 p=p,
                 u=u,
-                source_manager=source_mgr
+                source_manager=source_mgr,
+                material = material
             )
 
             if not first_active_found:
@@ -209,7 +226,7 @@ class AdvancedController:
                 sy_fwhm = source_params['sy_fwhm'],
                 wx_fwhm = source_params['wx_fwhm'],
                 wy_fwhm = source_params['wy_fwhm'],
-                material = source_params['material']
+                #material = source_params['material']
             )
 
         else:
@@ -284,7 +301,7 @@ class AdvancedController:
             G_total = math.sqrt(G_total**2 + g**2)
 
         return {
-            'energy': source_params['E'],
+            'energy': source_params['energy'], #'energy': source_params['E'],
             'final_pos': last.position,
             'L2': last.L2,
             'M_total': last.M_total,

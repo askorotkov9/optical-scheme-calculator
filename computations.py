@@ -20,14 +20,16 @@ LENS_RESULT_FIELDS = [
     ("L1", float, "L1, m", lambda x: f"{x:.4f}"),
     ("L2", float, "L2, m", lambda x: "Inf" if x == float('inf') else f"{x:.4f}"),
     ("F", float, "F, m", lambda x: f"{x:.4f}"),
-    ("sx", float, "sx, um", lambda x: f"{x * 1e6:.2f}"),
-    ("sy", float, "sy, um", lambda x: f"{x * 1e6:.2f}"),
-    ("sfpx", float, "sfpx, um", lambda x: f"{x * 1e6:.2f}"),
-    ("sfpy", float, "sfpy, um", lambda x: f"{x * 1e6:.2f}"),
-    ("alx", float, "Alx, um", lambda x: f"{x * 1e6:.2f}"),
-    ("aly", float, "Aly, um", lambda x: f"{x * 1e6:.2f}"),
-    ("sfx", float, "Focus X, um", lambda x: f"{x * 1e6:.2f}"),
-    ("sfy", float, "Focus Y, um", lambda x: f"{x * 1e6:.2f}"),
+    ("sx_fwhm", float, "source (x), um", lambda x: f"{x * 1e6:.2f}"),
+    ("sy_fwhm", float, "source (y), um", lambda x: f"{x * 1e6:.2f}"),
+    ("sfpx", float, "Sfp (x), um", lambda x: f"{x * 1e6:.2f}"),
+    ("sfpy", float, "Sfp (y), um", lambda x: f"{x * 1e6:.2f}"),
+    ("alx", float, "Al (x), um", lambda x: f"{x * 1e6:.2f}"),
+    ("aly", float, "Al (y), um", lambda x: f"{x * 1e6:.2f}"),
+    ("slx", float, None, lambda x: f"{x * 1e6:.2f}"),
+    ("sly", float, None, lambda x: f"{x * 1e6:.2f}"),
+    ("sfx", float, "Focus Size (x), um", lambda x: f"{x * 1e6:.2f}"),
+    ("sfy", float, "Focus Size (y), um", lambda x: f"{x * 1e6:.2f}"),
     ("T", float, "Trans., %", lambda x: f"{x * 100:.1f}"),
     ("T_block", float, "T block, %", lambda x: f"{x * 100:.1f}"),
     #("T_total", float, "T total (%)", lambda x: f"{x * 100:.1f}"),
@@ -35,7 +37,18 @@ LENS_RESULT_FIELDS = [
     ("M_total", float, "M total", lambda x: f"{x:.3e}"),
     ("G", float, "G", lambda x: f"{x:.3e}"),
     ("G_total", float, "G total", lambda x: f"{x:.3e}"),
+    ("NA", float, "NA", lambda x: f"{x:.3e}"),
+    ("NA_block", float, "NA block", lambda x: f"{x:.3e}"),
+    ("Aeff", float, "Effective Aperture, um", lambda x: f"{x * 1e6:.2f}"),  # в мкм
+    ("Aeff_total", float, "Aeff total", lambda x: f"{x * 1e6:.2f}"),  # в мкм
+    ("Aeff_block", float, "Aeff block", lambda x: f"{x * 1e6:.2f}"),  # в мкм
+    ("dof_x", float, None, lambda x: f'{x:.3e}'),
+    ("dof_y", float, None, lambda x: f'{x:.3e}'),
+    ("symmetry_dist", float, None, lambda x: f"{x:.4f}"),
+    ("symm_beam_size_x", float, None, lambda x: f"{x * 1e6:.2f}"),
+    ("symm_beam_size_y", float, None, lambda x: f"{x * 1e6:.2f}"),
     #("G_block", float, "G block", lambda x: f"{x:.3e}"),
+    #("num_aper_block", float, "N.A. TF, umrad", lambda x: f"{x * 1e6:.2f}"),
     # Можно добавить G, dof и т.д. — всё автоматически появится в GUI!
 ]
 
@@ -58,8 +71,14 @@ class BeamState:
     T_total: float = 1.0      # Общее пропускание
     G_total: float = 1.0      # Общий gain
 
+    NA_current_block: float = 0.0
+    Aeff_current_block: float = float('inf')
+    Aeff_current_tf: float = float('inf')
+
     T_blocks: List[float] = field(default_factory=list)
     G_blocks: List[float] = field(default_factory=list)
+    NA_blocks: List[float] = field(default_factory=list)
+    Aeff_blocks: List[float] = field(default_factory=list)
 
     # Параметры предыдущей линзы (для расчета следующей)
     L2_prev: float = 0.0
@@ -108,8 +127,8 @@ class Formulas:
 
     @staticmethod
     def Aeff_system(Aeff_prev, Aeff_curr):
-    #    if n == 1 and self.first_on_way == True:
-    #        return Aeff2
+        if Aeff_prev == float('inf'):
+            return Aeff_curr
         return math.sqrt(1/(1/Aeff_prev**2 + 1/Aeff_curr**2))
 
     @staticmethod
@@ -126,10 +145,32 @@ class Formulas:
         return res
     
     @staticmethod
+    def sigma(Aeff):
+        return Aeff / 2.35482
+
+    @staticmethod
+    def get_k_param(A, Aeff):
+        sigma = Aeff / 2.35482 #FWHM / 2.35482
+        n_pow = 6
+        A0 = 6 * sigma
+
+        w = 1 / (1 + (A / A0)**n_pow)
+        a = Aeff / A
+
+        k = (a + 1/6 * math.exp(-a) * w + 0.442 * (1 - w))
+        return k
+    
+    @staticmethod
     def sf(M, s, diff_lim):
         """Размер пучка в фокусе"""
         sl = M * s
         return math.sqrt(sl**2 + diff_lim**2)
+    
+    @staticmethod
+    def sl(M, s):
+        """Размер пучка в фокусе"""
+        sl = M * s
+        return sl
 
     @staticmethod
     def sfp(L2_prev, L1, Al_prev, s_divergence, s, l, first_on_way: bool):
@@ -173,9 +214,10 @@ class Formulas:
         erf_aly = math.erf(A * const / Aly)
         erf_sfpx = math.erf(A * const / sfpx)
         erf_sfpy = math.erf(A * const / sfpy)
-        T = math.exp(-mu * d) * (Alx * Aly) / (sfpx * sfpy) * (erf_alx * erf_aly) / (erf_sfpx * erf_sfpy)
-        #return fwhm_aeff if Formulas.use_fwhm else sigma_aeff
-        return T
+        T_fwhm = math.exp(-mu * d) * (Alx * Aly) / (sfpx * sfpy) * (erf_alx * erf_aly) / (erf_sfpx * erf_sfpy)
+        T_sigma = math.exp(-mu * d) * (Alx * Aly) / (sfpx * sfpy) * (erf_alx * erf_aly) / (erf_sfpx * erf_sfpy) #исправить
+        #return fwhm_aeff if Formulas.use_fwhm else sigma_aeff 
+        return T_fwhm if Formulas.use_fwhm else T_sigma
     
     @staticmethod
     def transmission_total(T1, T2):
@@ -192,40 +234,43 @@ class Formulas:
     
     @staticmethod
     def gain_total(G1, G2):
-        return math.sqrt(G1**2 + G2**2)
-
-    @staticmethod
-    def sigma(Aeff):
-        return Aeff / 2.35482
-
-
-    @staticmethod
-    def get_k_param(A, Aeff):
-        sigma = Aeff / 2.35482 #FWHM / 2.35482
-        n_pow = 6
-        A0 = 6 * sigma
-
-        w = 1 / (1 + (A / A0)**n_pow)
-        a = Aeff / A
-
-        k = (a + 1/6 * math.exp(-a) * w + 0.442 * (1 - w))
-        return k
+        return G1*G2#math.sqrt(G1**2 + G2**2)
     
     @staticmethod
-    def dof(L2, sf, Al, lamda, F, Aeff) -> Tuple[float, float, float]:
-        """Глубина резкости (Depth of Field)."""
-        if F == 0: return 0,0,0
-        num_ap = Aeff / (2 * F)
-        if num_ap == 0: return float('inf'), 0, 0
-        
-        dof_diff = lamda / (num_ap**2)
-        
-        if Al == 0: dof_g = float('inf')
-        else: dof_g = 2 * L2 * sf / Al
-        
-        dof_total = math.sqrt(dof_diff**2 + dof_g**2)
-        return dof_total, dof_diff, dof_g
+    def numerical_aperture(Aeff, F):
+        return Aeff / (2 * F)
+    
+    @staticmethod
+    def num_aper_total():
+        return
+    
+    @staticmethod
+    def symmetry_dist(l2, sfy, sfx, alx, aly, k):
+        """Calculate distance from last lens for symmetry beam"""
+        try:
+            return l2*math.sqrt((math.pow((1 + k) * sfy, 2) - math.pow(sfx, 2)) / (math.pow(alx, 2) - math.pow((1 + k) * aly, 2)))
+        except ZeroDivisionError:
+            return 0 #min(dofx, dofy)
+        except ValueError:
+            return 0#'Корень из отрицательного числа' #min(dofx, dofy)
+    
+    @staticmethod
+    def symm_beam_size(Al, L2, L, sf):
+        """Calculate size of symmetry beam"""
+        sg = Al * L / L2
+        return math.sqrt(sf**2 + sg**2)
 
+    @staticmethod
+    def dof(L2, sl, Al, lamda, num_ap):
+        """depth of field"""
+        dof_diff = lamda / (num_ap**2)
+        dof_g = 2 * L2 * sl / Al
+        dof_total = math.sqrt(math.pow(dof_g, 2))        
+        #return 0.88*lamda*l2**2/Aeff**2; либо как в диссере зверева
+        #из диссера поликарпова дополнительно рассмотреть хроматические абберации
+        #N.A. = arctg(Aeff/(2*L1)) = Aeff/(2*L1); либо Aeff/(2*f)
+        #взять картинку для пучка в фокусе как у зверева в диссертации
+        return dof_total
 
 
 # --- 3. Логика расчета (Logic) ---
@@ -249,16 +294,17 @@ class Calculator:
             #Это случай самой первой линзы
             state = BeamState(
                 z = 0,
-                wx = source_params['w0x'],
-                wy = source_params['w0y'],
-                sx = source_params['sx'],
-                sy = source_params['sy'],
+                wx = source_params['wx_fwhm'],
+                wy = source_params['wy_fwhm'],
+                sx = source_params['sx_fwhm'],
+                sy = source_params['sy_fwhm'],
                 L2_prev = 0,
                 Alx_prev = 0, 
                 Aly_prev = 0,
                 M_total = 1,
                 T_total = 1,
-                G_total = 1
+                G_total = 1,
+                Aeff_prev_total = float('inf')
             )
         else:
             state = initial_state
@@ -269,7 +315,9 @@ class Calculator:
         for i, lens_conf in enumerate(lens_config):
             if lens_conf.get('is_first_in_tf', False):
                 state.T_current_block = 1.0
-                state.G_current_block = 0.0
+                state.G_current_block = 1.0
+                state.NA_current_block = 0.0
+                state.Aeff_current_block = float('inf')
 
             # 1. Извлекаем параметры линзы
             # Если передана группа (N > 1), нужно решить, как считать. 
@@ -288,9 +336,6 @@ class Calculator:
             d = lens_conf['d']
 
             # Расстояние от предыдущего элемента
-            # Если это первая линза в общем списке, берем 'initial_L1' (нужно передать)
-            # В твоем коде расстояние считалось снаружи.
-            # Пусть lens_conf хранит 'distance_from_prev'
             t = lens_conf['distance_from_prev']
 
             #Определяем L1 (расстояние от источника / предыдущего фокуса до линзы)
@@ -313,8 +358,8 @@ class Calculator:
             l_position = state.z + t
 
             if is_first:
-                sfpx = Formulas.sfp_first_lens(L1=L1, divergence=state.wx, source_size=state.sx)
-                sfpy = Formulas.sfp_first_lens(L1=L1, divergence=state.wy, source_size=state.sy)
+                sfpx = Formulas.sfp_first_lens(L1=L1, divergence=state.wx, source_size=state.sx) if state.wx else A_phys
+                sfpy = Formulas.sfp_first_lens(L1=L1, divergence=state.wy, source_size=state.sy) if state.wy else A_phys
             else:
                 sfpx = Formulas.sfp_next_lens(L2_prev = state.L2_prev, Al_prev = state.Alx_prev, dist_from_prev = t)
                 sfpy = Formulas.sfp_next_lens(L2_prev = state.L2_prev, Al_prev = state.Aly_prev, dist_from_prev = t)
@@ -325,23 +370,27 @@ class Calculator:
             diff_lim = Formulas.diff_lim(L2, A_phys, Aeff, lamda)
             sfx = Formulas.sf(M, state.sx, diff_lim)
             sfy = Formulas.sf(M, state.sy, diff_lim)
+            slx = Formulas.sl(M, state.sx)
+            sly = Formulas.sl(M, state.sy)
 
             ''' Поменять расчёт для сценария sigma'''
             T = Formulas.transmission(A_phys, alx, aly, sfpx, sfpy, mu, d) 
-            #T_total = Formulas.transmission_total(T_total, T)
 
             L_total_dist = L1 + L2
             sb_x = math.sqrt((L_total_dist * state.wx)**2 + state.sx**2)
             sb_y = math.sqrt((L_total_dist * state.wy)**2 + state.sy**2)
             G = Formulas.gain(T, sb_x, sb_y, sfx, sfy)
-            #G_total = Formulas.gain_total(G_total, G)
+
+            NA = Formulas.numerical_aperture(Aeff, F)
+            state.NA_current_block = NA  # можно сделать накопление, если нужно
+            state.Aeff_current_block = Aeff_sys
 
             #Обновление состояния для следующей итерации
             new_wx = state.wx - alx/F #под вопросом правильность
             new_wy = state.wy - aly/F
 
             state.T_current_block *= T
-            state.G_current_block = math.sqrt(state.G_current_block**2 + G**2)
+            state.G_current_block *= G #= math.sqrt(state.G_current_block**2 + G**2)
 
             new_M_total = state.M_total * M
             new_T_total = state.T_total * T
@@ -361,12 +410,14 @@ class Calculator:
                 'L1': L1,
                 'L2': L2,
                 'F': F,
-                'sx': state.sx,
-                'sy': state.sy,
+                'sx_fwhm': state.sx,
+                'sy_fwhm': state.sy,
                 'sfpx': sfpx,
                 'sfpy': sfpy,
                 'alx': alx,
                 'aly': aly,
+                'slx': slx,
+                'sly': sly,
                 'sfx': sfx,
                 'sfy': sfy,
                 'T': T,
@@ -374,24 +425,39 @@ class Calculator:
                 'M': M,
                 'M_total': new_M_total,
                 'G': G,
-                'G_total': state.G_current_block
+                'G_total': state.G_current_block,
                 # ... остальные поля
+
+                'NA': NA,
+                'NA_block': state.NA_current_block,
+                'Aeff': Aeff,
+                'Aeff_total': Aeff_sys,
+                'Aeff_block': state.Aeff_current_block,
+                # calculated only for last lens
+                'dof_x': 0.0,
+                'dof_y': 0.0, 
+                'symmetry_dist': 0.0,
+                'symm_beam_size_x': 0.0,
+                'symm_beam_size_y': 0.0,
             }
 
             if lens_conf.get('is_last_in_tf', False):
                 state.T_blocks.append(state.T_current_block)
                 state.G_blocks.append(state.G_current_block)
+                state.NA_blocks.append(state.NA_current_block)
+                state.Aeff_blocks.append(state.Aeff_current_block)
+                dof_x = Formulas.dof(L2, sfx, alx, lamda, NA)
+                dof_y = Formulas.dof(L2, sfy, aly, lamda, NA)
+                result_data['dof_x'] = dof_x
+                result_data['dof_y'] = dof_y
+            #result_data.setdefault('dof_x', 0.0)
+            #result_data.setdefault('dof_y', 0.0)
+            #result_data.setdefault('symmetry_dist', 0.0)
+            #result_data.setdefault('symm_beam_size_x', 0.0)
+            #result_data.setdefault('symm_beam_size_y', 0.0)
 
             # Создаём объект
             res = LensResult(**result_data)
-            ''' 
-            res = LensResult(
-                index = i + 1,
-                position = state.z + t,
-                L1 = L1, L2 = L2, F = F, M = M, T = T, G = G,
-                alx = alx, aly = aly, sfx = sfx, sfy = sfy #M total, T total, diff_lim
-            )
-            '''
             results.append(res)
 
             #Обновление state
@@ -402,7 +468,7 @@ class Calculator:
             state.sy = sfy
             state.M_total *= M
             state.T_total *= T
-            state.G_total = new_G_total #подумать над правильностью Formulas.gain_total(current_G_total, G)
+            state.G_total *= G#new_G_total #подумать над правильностью Formulas.gain_total(current_G_total, G)
             
             state.L2_prev = L2
             state.Alx_prev = alx
@@ -415,31 +481,40 @@ class Calculator:
             p = lens_conf['p']
             mu = lens_conf['mu']
 
+        if results:
+            last = results[-1]
+
+            # === NA для последней линзы ===
+            Aeff_last = Formulas.Aeff_single_lens(last.F, delta, mu)  # нужно передать актуальные delta, mu
+            NA_last = Formulas.numerical_aperture(Aeff_last, last.F)
+
+            # === k-коэффициент ===
+            k = 0.01 #cltkfnm 
+
+            # === DoF ===
+            num_ap = NA_last
+            if num_ap != 0:
+                dof_x = Formulas.dof(last.L2, last.slx, last.alx, lamda, num_ap)
+                dof_y = Formulas.dof(last.L2, last.sly, last.aly, lamda, num_ap)
+            else:
+                dof_x = 0.0
+                dof_y = 0.0
+
+            # === Symmetry ===
+            try:
+                sym_dist = Formulas.symmetry_dist(last.L2, last.sfy, last.sfx, last.alx, last.aly, k)
+            except:
+                sym_dist = 0.0
+
+            try:
+                sym_size_x = Formulas.symm_beam_size(last.alx, last.L2, sym_dist, last.sfx)
+                sym_size_y = Formulas.symm_beam_size(last.aly, last.L2, sym_dist, last.sfy)
+            except:
+                sym_size_x, sym_size_y = 0.0, 0.0
+
+            # === Обновляем только последний элемент ===
+            last.dof_x, last.dof_y = dof_x, dof_y
+            last.symmetry_dist = sym_dist
+            last.symm_beam_size_x, last.symm_beam_size_y = sym_size_x, sym_size_y
+
         return results, state
-    
-
-# --- 4. Вспомогательные функции (исправленные) ---
-
-def symmetry_dist_cleaned(l2, sfy, sfx, dofx_total, dofy_total):
-    """
-    Попытка найти расстояние, где пучок становится круглым (симетричным).
-    Решает уравнение размеров пучка относительно Z.
-    """
-    # В оригинале было много закомментированного кода и хардкода.
-    # Если предположить линейную зависимость расходимости от фокуса:
-    # Size(z) ~ sf + divergence * z
-    # Это сложно решить аналитически точно для всех случаев (дифракция + геометрия).
-    
-    # Упрощенно ищем точку пересечения конусов схождения/расхождения.
-    # Если sfx > sfy, то пучок X сходится медленнее (или расходится быстрее).
-    
-    # ВНИМАНИЕ: Пользователь должен проверить физическую модель здесь.
-    # Код ниже - это математически корректная заглушка для поиска пересечения.
-    
-    # Пример простой геометрической оценки:
-    # return l2 * (sfx - sfy) / (sfx + sfy) # ОЧЕНЬ ГРУБО
-    
-    # Возвращаем 0, так как оригинальная функция была сломана/захардкожена
-    # Рекомендуется использовать численный метод (перебор) в GUI:
-    # посчитать symm_beam_size для z от 0 до L2 и найти минимум разницы |size_x - size_y|
-    return 0.605 # Возвращаем значение из твоего print для совместимости пока что
