@@ -35,53 +35,25 @@ class AdvancedController:
         block_length = 0.01  # 10 мм
         inter_block_gap = self.defaults.get('inter_block_gap', 0.001)
 
-        # === 1. РАССТАНОВКА БЛОКОВ ===
-        block_positions = []
-        current_pos = first_dist
-
-        for group_idx, group in enumerate(groups_data):
-            n_lenses = min(group['N'], 5)  # максимум 5 линз
-
-            if group_idx == 0:
-                block_start = current_pos
-            else:
-                # Зазор между блоками (пока фиксированный)
-                # Если хотите, можно сделать: gap = base - factor * (N_prev + N_curr)
-                # Но по вашему примеру: 1 мм между стенками
-                gap = 0.001  # 1 мм
-                block_start = current_pos + gap
-
-            block_end = block_start + block_length
-            block_center = block_start + block_length / 2.0
-
-            block_positions.append({
-                'start': block_start,
-                'end': block_end,
-                'center': block_center,
-                'n_lenses': n_lenses
-            })
-
-            current_pos = block_end
-
-        # === 2. РАЗМЕЩЕНИЕ ЛИНЗ ВНУТРИ БЛОКОВ ===
+        # === 1. РАССТАНОВКА БЛОКОВ (все линзы, включая неактивные) ===
         all_lenses = []
 
-        for group_idx, (group, block_pos) in enumerate(zip(groups_data, block_positions)):
-            n_lenses = block_pos['n_lenses']
-            block_start = block_pos['start']
+        current_block_start = first_dist  # first_dist — это начало первого блока
 
+        for group_idx, group in enumerate(groups_data):
+            n_lenses = min(group['N'], 5)
+
+            # === Позиции линз внутри блока ===
             if n_lenses * p > block_length:
                 raise ValueError(f"Block {group_idx+1}: {n_lenses} lenses don't fit in 10 mm block")
 
-            # === Стенки по бокам ===
             total_lens_width = n_lenses * p
             free_space = block_length - total_lens_width
             wall_thickness = free_space / 2.0
 
-            # === Позиции линз внутри блока ===
             for lens_idx in range(n_lenses):
                 pos_in_block = wall_thickness + (lens_idx + 0.5) * p
-                abs_pos = block_start + pos_in_block
+                abs_pos = current_block_start + pos_in_block
 
                 # Получаем preset и active
                 if 'lenses' in group and group['lenses'] is not None and len(group['lenses']) == n_lenses:
@@ -95,14 +67,14 @@ class AdvancedController:
                     'abs_pos': abs_pos,
                     'block_index': group_idx + 1,
                     'lens_index_in_block': lens_idx + 1,
-                    'material': lens_info.get('material', LENS_PRESETS[lens_info['preset']]['material'])
+                    'material': lens_info.get('material', LENS_PRESETS[lens_info['preset']].get('material', 'Be'))
                 })
 
-        # === 3. СОЗДАНИЕ ЦЕПОЧКИ ===
-        chain = []
-        prev_active_pos = 0.0
-        first_active_found = False
+            # Переход к следующему блоку
+            current_block_start += block_length + inter_block_gap
 
+        # === 2. СОЗДАНИЕ ЦЕПОЧКИ (только активные линзы) ===
+        chain = []
         for i, lens_geom in enumerate(all_lenses):
             if not lens_geom['active']:
                 continue
@@ -116,14 +88,7 @@ class AdvancedController:
                 material = lens_geom.get('material')
             )
 
-            if not first_active_found:
-                lens['distance_from_prev'] = lens_geom['abs_pos']
-                prev_active_pos = lens_geom['abs_pos']
-                first_active_found = True
-            else:
-                lens['distance_from_prev'] = lens_geom['abs_pos'] - prev_active_pos
-                prev_active_pos = lens_geom['abs_pos']
-
+            lens['abs_pos'] = lens_geom['abs_pos']  # ← передаём абсолютную позицию
             lens['tf_name'] = tf_name
             lens['block_index'] = lens_geom['block_index']
             lens['lens_index_in_tf'] = len(chain) + 1
@@ -138,36 +103,25 @@ class AdvancedController:
             chain[-1]['is_last_in_tf'] = True
 
         return chain
-    
-    def _build_air_tf(self, source_mgr, lenses, first_dist, tf_name = "Air"):
-        """
-        Собирает воздушный TF с физическим удалением неактивных линз.
-        lenses: список словарей [{'preset': ..., 'active': ...}, ...]
-        first_dist: расстояние от источника до ПЕРВОЙ линзы (даже если она неактивна!)
-        """
+
+    def _build_air_tf(self, source_mgr, lenses, first_dist, tf_name="Air"):
         if not lenses:
             return []
 
         p = self.defaults['p']
         u = self.defaults['u_air']
         
-        # Шаг между центрами соседних линз
         step = p + u
 
-        # 1. Строим полную геометрию: позиции ВСЕХ линз
         all_positions = []
         for i in range(len(lenses)):
-            pos = first_dist + i * step
+            pos = first_dist + i * step  # ← теперь это absolute_start + offset
             all_positions.append(pos)
 
-        # 2. Собираем цепочку только из активных линз
         chain = []
-        prev_active_pos = 0.0  # позиция предыдущей активной линзы (абсолютная)
-        first_active_found = False
-
         for i, (lens_info, abs_pos) in enumerate(zip(lenses, all_positions)):
             if not lens_info.get('active', True):
-                continue  # пропускаем неактивную
+                continue
 
             preset = lens_info.get('preset', 'R50')
             material = lens_info.get('material')
@@ -180,28 +134,17 @@ class AdvancedController:
                 material = material
             )
 
-            if not first_active_found:
-                # Первая активная линза: расстояние от источника
-                lens['distance_from_prev'] = abs_pos
-                prev_active_pos = abs_pos
-                first_active_found = True
-            else:
-                # Последующие: расстояние от предыдущей активной
-                lens['distance_from_prev'] = abs_pos - prev_active_pos
-                prev_active_pos = abs_pos
-
-            # Метаданные
+            lens['abs_pos'] = abs_pos  # ← передаём абсолютную позицию
             lens['tf_name'] = tf_name
             lens['block_index'] = 1
             lens['lens_index_in_tf'] = len(chain) + 1
             lens['is_first_in_tf'] = (len(chain) == 0)
             lens['lens_index_in_block'] = i + 1
-            lens['is_last_in_block'] = False #True
-            lens['is_last_in_tf'] = False  # обновим позже
+            lens['is_last_in_block'] = False
+            lens['is_last_in_tf'] = False
 
             chain.append(lens)
 
-        # Обновляем is_last_in_tf
         if chain:
             chain[-1]['is_last_in_tf'] = True
 
@@ -213,9 +156,10 @@ class AdvancedController:
             #N = block_conf['lens_count']
             return 0.1396  # 10 мм на линзу
         else:  # vacuum
-            groups = block_conf['groups']
-            N_blocks = sum(1 for g in groups if g['active'])
-            return N_blocks * 0.01  # 10 мм на блок
+            return 0.153
+            #groups = block_conf['groups']
+            #N_blocks = sum(1 for g in groups if g['active'])
+            #return N_blocks * 0.01  # 10 мм на блок
     
     def run_calculations(self, energy, structure_config, source_params = None):
         # 1. Настройка источника
@@ -226,9 +170,7 @@ class AdvancedController:
                 sy_fwhm = source_params['sy_fwhm'],
                 wx_fwhm = source_params['wx_fwhm'],
                 wy_fwhm = source_params['wy_fwhm'],
-                #material = source_params['material']
             )
-
         else:
             source_mgr = SourceManager(energy = energy)
             
@@ -237,55 +179,40 @@ class AdvancedController:
         # 2. Сборка конфигурации системы (геометрия)
         lens_chain = []
 
-        current_end_pos = 0.0  # текущая конечная позиция системы (после источника = 0)
-
         for index, block_conf in enumerate(structure_config):
             block_type = block_conf.get('type')
-            absolute_start = block_conf.get('absolute_start')
-            distance_from_prev = absolute_start - current_end_pos
+            absolute_start = block_conf.get('absolute_start')  # ← теперь получаем готовый absolute_start
 
             if block_type == 'vacuum':
                 groups = block_conf.get('groups', [])
                 tf_name = block_conf.get('tf_name', f'Vacuum {index}')
                 block_chain = self._build_vacuum_tf(
                     source_mgr,
-                    groups_data = groups,        # ← правильное имя параметра
-                    first_dist = distance_from_prev,
+                    groups_data = groups,
+                    first_dist = absolute_start,  # ← передаём абсолютную позицию начала TF
                     tf_name = tf_name
                 )
                 lens_chain.extend(block_chain)
-                block_length = self._calculate_block_length(block_type, block_conf)
-                current_end_pos = absolute_start + block_length
 
             elif block_type == 'air':
                 lenses = block_conf.get('lenses', [])
-                if lenses is None:
-                    # fallback для обратной совместимости (не должно сработать)
-                    count = block_conf.get('lens_count', 10)
-                    preset = block_conf.get('preset', 'R50')
-                    lenses = [{'preset': preset, 'active': True} for _ in range(count)]
-                    #current_end_pos = absolute_start + block_length
-                
                 tf_name = block_conf.get('tf_name', f'Air {index}')
                 block_chain = self._build_air_tf(
                     source_mgr,
                     lenses = lenses,
-                    first_dist = distance_from_prev,
+                    first_dist = absolute_start,  # ← передаём абсолютную позицию начала TF
                     tf_name = tf_name
                 )
                 lens_chain.extend(block_chain)
-            
-                block_length = self._calculate_block_length(block_type, block_conf)
-                current_end_pos = absolute_start + block_length#self._calculate_block_length(block_type, 1)
 
         # 3. Расчёт
-        results, final_state = Calculator.propagate( #self.results, self.final_state = Calculator.propagate
+        results, final_state = Calculator.propagate(
             lens_config = lens_chain,
             source_params = source_params
         )
 
         # 4. Отчёт
-        return self._generate_report(source_params, results, final_state) #self._generate_report(source_params)
+        return self._generate_report(source_params, results, final_state)
     
     def _generate_report(self, source_params, results, final_state):
         if not results:

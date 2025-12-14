@@ -27,7 +27,13 @@ class Transfocator:
         # Конфигурация
         self.lenses = self._build_air_lenses() if tf_type == "Air (Array)" else []
         # Теперь groups — это список словарей с N, preset, active
-        self.groups = [{"N": 1, "preset": preset, "active": True}, {"N": 2, "preset": preset, "active": True}, {"N": 1, "preset": preset, "active": True}] if tf_type == "Vacuum (Groups)" else []
+        self.groups = [{"N": 1, "preset": preset, "active": True}, {"N": 2, "preset": preset, "active": True}, 
+                       {"N": 1, "preset": preset, "active": True}, {"N": 4, "preset": preset, "active": False},
+                       {"N": 5, "preset": preset, "active": False}, {"N": 5, "preset": preset, "active": False},
+                       {"N": 5, "preset": preset, "active": False}, {"N": 5, "preset": preset, "active": False},
+                       {"N": 5, "preset": preset, "active": False}, {"N": 5, "preset": preset, "active": False},
+                       {"N": 5, "preset": preset, "active": False}, {"N": 5, "preset": preset, "active": False},
+                       {"N": 5, "preset": preset, "active": False}, {"N": 5, "preset": preset, "active": False},] if tf_type == "Vacuum (Groups)" else []
 
         # UI виджеты (инициализируются при создании UI)
         self.ui_widgets = {}
@@ -437,12 +443,19 @@ class XRayCalcApp(QMainWindow):
             config['tf_name'] = tf.name
 
             pos = tf.ui_widgets['spin_pos'].value()
-            if tf.ui_widgets['chk_center'].isChecked():
-                # Примерные длины для Air и Vacuum
-                length = 0.1396 if tf.tf_type == "Air (Array)" else 0.153
-                absolute_start = pos - length / 2
+            measure_to_center = tf.ui_widgets['chk_center'].isChecked()
+
+            # === ВЫБОР ДЛИНЫ TF (фиксированная) ===
+            if tf.tf_type == "Air (Array)":
+                length = 0.1396  # фиксированная длина для Air
+            else:  # Vacuum
+                length = 0.153  # фиксированная длина для Vacuum
+
+            # === ВЫЧИСЛЕНИЕ absolute_start ===
+            if measure_to_center:
+                absolute_start = pos - length / 2.0  # начало TF = центр - половина длины
             else:
-                absolute_start = pos
+                absolute_start = pos  # начало TF = позиция
 
             config['absolute_start'] = absolute_start
             structure_config.append(config)

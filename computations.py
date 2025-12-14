@@ -319,6 +319,17 @@ class Calculator:
                 state.NA_current_block = 0.0
                 state.Aeff_current_block = float('inf')
 
+            abs_pos = lens_conf.get('abs_pos', None)
+            if abs_pos is not None:
+                if i == 0:
+                    distance_from_prev = abs_pos  # ← от источника
+                else:
+                    prev_abs_pos = lens_config[i - 1].get('abs_pos', state.z)
+                    distance_from_prev = abs_pos - prev_abs_pos
+            else:
+                # fallback: использовать distance_from_prev, если abs_pos не задан
+                distance_from_prev = lens_conf.get('distance_from_prev', 0)
+
             # 1. Извлекаем параметры линзы
             # Если передана группа (N > 1), нужно решить, как считать. 
             # Твой код считал линзы по одной внутри группы? Или группу как одну линзу?
@@ -336,7 +347,7 @@ class Calculator:
             d = lens_conf['d']
 
             # Расстояние от предыдущего элемента
-            t = lens_conf['distance_from_prev']
+            t = distance_from_prev
 
             #Определяем L1 (расстояние от источника / предыдущего фокуса до линзы)
             if state.L2_prev == 0 and state.Alx_prev == 0:
