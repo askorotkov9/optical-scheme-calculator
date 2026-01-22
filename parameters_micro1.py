@@ -96,7 +96,7 @@ class LensGenerator:
 
         #Если передан менеджер (?) источника, добавляем оптические свойства
         if source_manager:
-            from xraydb import xray_delta_beta, get_material
+            #from xraydb import xray_delta_beta, get_material
 
             mat_obj = get_material(material)
             if mat_obj is not None and hasattr(mat_obj, 'density'):

@@ -16,7 +16,7 @@ from source_editor import SourceEditorDialog
 
 # --- Универсальный класс трансфокатора ---
 class Transfocator:
-    def __init__(self, name, tf_type="Air (Array)", preset="R50", total_lenses=100, active_ranges=None, measure_to_center=True):
+    def __init__(self, name, tf_type="air", preset="R50", total_lenses=100, active_ranges=None, measure_to_center=True):
         self.name = name
         self.tf_type = tf_type
         self.preset = preset
@@ -25,15 +25,15 @@ class Transfocator:
         self.measure_to_center = measure_to_center
         
         # Конфигурация
-        self.lenses = self._build_air_lenses() if tf_type == "Air (Array)" else []
+        self.lenses = self._build_air_lenses() if tf_type == "air" else []
         # Теперь groups — это список словарей с N, preset, active
         self.groups = [{"N": 1, "preset": preset, "active": True}, {"N": 2, "preset": preset, "active": True}, 
-                       {"N": 1, "preset": preset, "active": True}, {"N": 4, "preset": preset, "active": False},
+                       {"N": 3, "preset": preset, "active": True}, {"N": 4, "preset": preset, "active": False},
                        {"N": 5, "preset": preset, "active": False}, {"N": 5, "preset": preset, "active": False},
                        {"N": 5, "preset": preset, "active": False}, {"N": 5, "preset": preset, "active": False},
                        {"N": 5, "preset": preset, "active": False}, {"N": 5, "preset": preset, "active": False},
                        {"N": 5, "preset": preset, "active": False}, {"N": 5, "preset": preset, "active": False},
-                       {"N": 5, "preset": preset, "active": False}, {"N": 5, "preset": preset, "active": False},] if tf_type == "Vacuum (Groups)" else []
+                       {"N": 5, "preset": preset, "active": False}, {"N": 5, "preset": preset, "active": False},] if tf_type == "vacuum" else []
 
         # UI виджеты (инициализируются при создании UI)
         self.ui_widgets = {}
@@ -53,7 +53,7 @@ class Transfocator:
 
     def update_preset(self, preset):
         self.preset = preset
-        if self.tf_type == "Air (Array)":
+        if self.tf_type == "air":
             for lens in self.lenses:
                 lens["preset"] = preset
         else:
@@ -61,7 +61,7 @@ class Transfocator:
                 group["preset"] = preset
 
     def get_config(self):
-        if self.tf_type == "Air (Array)":
+        if self.tf_type == "air":
             return {"type": "air", "lenses": self.lenses}
         else:
             return {"type": "vacuum", "groups": self.groups}
@@ -72,7 +72,7 @@ class TransfocatorManager:
     def __init__(self):
         self.tfs = []
 
-    def add_tf(self, name, tf_type="Air (Array)", preset="R50", total_lenses=100, active_ranges=None):
+    def add_tf(self, name, tf_type="air", preset="R50", total_lenses=100, active_ranges=None):
         tf = Transfocator(name, tf_type, preset, total_lenses, active_ranges)
         self.tfs.append(tf)
         return tf
@@ -108,8 +108,8 @@ class XRayCalcApp(QMainWindow):
         self.tf_manager = TransfocatorManager()
 
         # Создаём TF1 и TF2 по умолчанию
-        self.tf_manager.add_tf("TF1", "Vacuum (Groups)", "R500", total_lenses=100, active_ranges=[(0, 8)])  # Vacuum по умолчанию
-        self.tf_manager.add_tf("TF2", "Air (Array)", "R50", total_lenses=100, active_ranges=[(0, 8)])
+        self.tf_manager.add_tf("TF1", "vacuum", "R500", total_lenses=100, active_ranges=[(0, 8)])  # Vacuum по умолчанию
+        self.tf_manager.add_tf("TF2", "air", "R50", total_lenses=100, active_ranges=[(0, 8)])
 
         self.source_params = {
             'energy': 10300.0,
@@ -219,7 +219,7 @@ class XRayCalcApp(QMainWindow):
         hbox_type = QHBoxLayout()
         hbox_type.addWidget(QLabel("Type:"))
         combo_type = QComboBox()
-        combo_type.addItems(["Vacuum (Groups)", "Air (Array)"])
+        combo_type.addItems(["vacuum", "air"])
         combo_type.setCurrentText(tf.tf_type)
         hbox_type.addWidget(combo_type)
 
@@ -281,7 +281,7 @@ class XRayCalcApp(QMainWindow):
         combo_type.currentTextChanged.connect(lambda t: self.on_tf_type_changed(t, tf, wdg_air, wdg_vac))
 
         # Скрыть/показать виджеты в зависимости от типа
-        if tf.tf_type == "Air (Array)":
+        if tf.tf_type == "air":
             wdg_air.setVisible(True)
             wdg_vac.setVisible(False)
         else:
@@ -324,20 +324,20 @@ class XRayCalcApp(QMainWindow):
         tf_obj.tf_type = tf_type
         
         # Скрываем/показываем виджеты
-        air_widget.setVisible(tf_type == "Air (Array)")
-        vac_widget.setVisible(tf_type == "Vacuum (Groups)")
+        air_widget.setVisible(tf_type == "air")
+        vac_widget.setVisible(tf_type == "vacuum")
         
         # Если переключаемся в Air, инициализируем lenses
-        if tf_type == "Air (Array)" and not tf_obj.lenses:
+        if tf_type == "air" and not tf_obj.lenses:
             tf_obj.lenses = tf_obj._build_air_lenses()
         
         # Если переключаемся в Vacuum, инициализируем groups
-        if tf_type == "Vacuum (Groups)" and not tf_obj.groups:
+        if tf_type == "vacuum" and not tf_obj.groups:
             tf_obj.groups = [{"N": 1, "preset": tf_obj.preset, "active": True}]
 
     def add_new_tf(self):
         name = f"TF{len(self.tf_manager.tfs) + 1}"
-        new_tf = self.tf_manager.add_tf(name, "Air (Array)", "R50", total_lenses=100, active_ranges=[(0, 8)])
+        new_tf = self.tf_manager.add_tf(name, "air", "R50", total_lenses=100, active_ranges=[(0, 8)])
         self.create_tf_ui(new_tf)
 
     def remove_tf(self, name):
@@ -396,18 +396,18 @@ class XRayCalcApp(QMainWindow):
 
     def open_tf_editor(self, name, tf_type, tf_obj):
         # Выбираем, какую конфигурацию передавать
-        config = tf_obj.lenses if tf_type == "Air (Array)" else tf_obj.groups
+        config = tf_obj.lenses if tf_type == "air" else tf_obj.groups
 
         dialog = TFEditorDialog(
             self, 
-            tf_type='air' if tf_type == "Air (Array)" else 'vacuum',
+            tf_type='air' if tf_type == "air" else 'vacuum',
             config=config,
             title=f"Edit {name}",
             energy = self.source_params['energy']
         )
         if dialog.exec_() == QDialog.Accepted:
             new_config = dialog.get_config()
-            if tf_type == "Air (Array)":
+            if tf_type == "air":
                 tf_obj.lenses = new_config
                 # Обновляем total_lenses и active_ranges
                 tf_obj.total_lenses = len(new_config)
@@ -446,7 +446,7 @@ class XRayCalcApp(QMainWindow):
             measure_to_center = tf.ui_widgets['chk_center'].isChecked()
 
             # === ВЫБОР ДЛИНЫ TF (фиксированная) ===
-            if tf.tf_type == "Air (Array)":
+            if tf.tf_type == "air":
                 length = 0.1396  # фиксированная длина для Air
             else:  # Vacuum
                 length = 0.153  # фиксированная длина для Vacuum
@@ -489,11 +489,10 @@ class XRayCalcApp(QMainWindow):
         focus_pos = report['final_pos'] + report['L2']
         summary = (
             f"<b>Energy:</b> {report['energy']} eV<br>"
-            #f"<b>Final Position:</b> {report['final_pos']:.4f} m<br>"
             f"<b>Focal Distance (L2) from last lens:</b> {report['L2']:.4f} m<br>"
             f"<b>Focus position:</b> {focus_pos:.4f} m<br>"
             f"<b>Transmission:</b> {report['T']*100:.2f} %<br>"
-            f"<b>Focus Size X:</b> {report['size_x']*1e6:.2f} um<br>"
+            f"<b>Focus Size X:</b> {report['size_x']*1e6:.2f} um<br>"   
             f"<b>Focus Size Y:</b> {report['size_y']*1e6:.2f} um<br>"
             f"<b>Depth of Field X:</b> {last.dof_x:.3f} m<br>"
             f"<b>Depth of Field Y:</b> {last.dof_y:.3f} m<br>"
@@ -504,7 +503,7 @@ class XRayCalcApp(QMainWindow):
         )
         self.txt_summary.setHtml(summary)
 
-
+        # === Разделение истории по TF и добавление заголовков ===
         tf_histories = {}
         for item in history:
             tf_name = item.tf_name
@@ -529,17 +528,37 @@ class XRayCalcApp(QMainWindow):
                 width = 100
                 table.setColumnWidth(col, width)
 
-            # Table content
+            # === Формирование списка строк для таблицы ===
             display_rows = []
+            n = len(tf_history)
+
             for i, item in enumerate(tf_history):
+                # Проверяем, является ли текущий элемент первым в TF или в блоке
+                is_first_in_tf = getattr(item, 'is_first_in_tf', False)
+                is_first_in_block = getattr(item, 'is_first_in_block', False)
+
+                # Вставляем заголовок TF, если это первая линза в TF
+                #   if is_first_in_tf:
+                #    display_rows.append(f"--- {tf_name} ---")
+
+                # Вставляем заголовок блока, если это первая линза в блоке
+                if is_first_in_block and getattr(item, 'tf_type', 'air') == 'vacuum':
+                    block_index = getattr(item, 'block_index', 1)
+                    display_rows.append(f"Block {block_index}")
+
+                # Добавляем саму линзу
                 display_rows.append(item)
+
+                # Проверяем, нужно ли вставить заголовок следующего блока или TF
                 is_last_in_block = getattr(item, 'is_last_in_block', False)
                 is_last_in_tf = getattr(item, 'is_last_in_tf', False)
 
-                if is_last_in_block and not is_last_in_tf and i + 1 < len(tf_history):
-                    next_block_index = getattr(tf_history[i + 1], 'block_index', None)
-                    if next_block_index is not None:
-                        display_rows.append(f"Block {next_block_index}")
+                #if is_last_in_block and not is_last_in_tf and i + 1 < len(tf_history):
+                #    next_item = tf_history[i + 1]
+                #    if getattr(next_item, 'tf_type', 'air') == 'vacuum':
+                #        next_block_index = getattr(next_item, 'block_index', None)
+                #        if next_block_index is not None:
+                #            display_rows.append(f"Block {next_block_index}")
                 
             table.setRowCount(len(display_rows))
             for row, item in enumerate(display_rows):
@@ -558,7 +577,7 @@ class XRayCalcApp(QMainWindow):
                         text = formatter(value) if formatter else str(value)
                         table.setItem(row, col, QTableWidgetItem(text))
 
-            self.tab_widget.addTab(table, tf_name) 
+            self.tab_widget.addTab(table, tf_name)
 
     def open_column_settings(self):
         all_fields_info = [
