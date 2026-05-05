@@ -1,7 +1,7 @@
 from xraydb import xray_delta_beta, get_material
 
 
-#Параметры линз
+#Lens params preset
 LENS_PRESETS = {
     'R50': {'R': 50E-6, 'A': 440E-6, 'material': 'Be'},
     'R100': {'R': 100E-6, 'A': 600E-6, 'material': 'Be'},
@@ -9,19 +9,16 @@ LENS_PRESETS = {
     'R500': {'R': 500E-6, 'A': 1400E-6, 'material': 'Be'},
 }
 
-#Динамические классы
-
 class SourceManager:
     """Управляет параметрами источника и пересчётом энергии"""
     def __init__(self, energy = 10300, sx_fwhm = 32.84*2.35482, sy_fwhm = 5.9*2.35482, wx_fwhm = 9.4*2.35482, wy_fwhm = 11.0*2.35482):
         ''' 
         Базовые параметры пучка, размеры на входе в мкм, хранение в м
         '''
-        self.sx_base = sx_fwhm * 1e-6# / 2.35482 # FWHM → метры
-        self.sy_base = sy_fwhm * 1e-6# / 2.35482
-        self.wx_base = wx_fwhm * 1e-6# / 2.35482  # мкрад → радианы
-        self.wy_base = wy_fwhm * 1e-6# / 2.35482
-        #self.material = material
+        self.sx_base = sx_fwhm * 1e-6
+        self.sy_base = sy_fwhm * 1e-6
+        self.wx_base = wx_fwhm * 1e-6
+        self.wy_base = wy_fwhm * 1e-6
         self.fwhm_conv = 2.35482
         self.set_energy(energy)
 
@@ -64,7 +61,7 @@ class SourceManager:
     
 
 class LensGenerator:
-    """Генератор конфигураций линз"""
+    """Lens configuration generator"""
 
     @staticmethod
     def create_lens_group(preset_name, N, p = 1e-3, u = 0, source_manager = None, material = 'Be'):
@@ -83,21 +80,17 @@ class LensGenerator:
         if material is None:
             material = base.get('material', 'Be')
 
-        #Собираем словарь
         lens_config = {
             'R': base['R'],
             'A': base['A'],
             'p': p,
             'u': u,
             'N': N,
-            'd': 30E-6, #толщина перемычки
+            'd': 30E-6,
             'material': material
         }
 
-        #Если передан менеджер (?) источника, добавляем оптические свойства
         if source_manager:
-            #from xraydb import xray_delta_beta, get_material
-
             mat_obj = get_material(material)
             if mat_obj is not None and hasattr(mat_obj, 'density'):
                 density = mat_obj.density

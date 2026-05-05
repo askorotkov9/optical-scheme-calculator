@@ -1,7 +1,6 @@
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QCheckBox, 
                              QPushButton, QScrollArea, QWidget, QLabel)
 from PyQt5.QtCore import Qt
-from computations import LENS_RESULT_FIELDS
 
 class ColumnSettingsDialog(QDialog):
     def __init__(self, parent=None, current_fields=None, all_fields=None):
@@ -58,7 +57,7 @@ class ColumnSettingsDialog(QDialog):
 
     def reset_to_default(self):
         # Можно задать ваши дефолтные колонки
-        default_fields = {'lens_index_in_tf', 'position', 'L1', 'L2', 'F', 'sfx', 'sfy', 'T', 'M'}
+        default_fields = {'lens_index_in_tf', 'position', 'R', 'L1', 'L2', 'F', 'sfx', 'sfy', 'T', 'M'}
         for cb in self.checkboxes:
             cb.setChecked(cb.field_name in default_fields)
 

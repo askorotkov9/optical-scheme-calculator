@@ -1,4 +1,3 @@
-import time
 from computations import Calculator, Formulas
 from parameters_micro1 import SourceManager, LensGenerator, LENS_PRESETS
 
@@ -9,8 +8,7 @@ class AdvancedController:
     детальные настройки групп (пресеты, in_beam) из GUI.
     """
 
-    def __init__(self):#, source_params, initial_scheme_params):
-        """В PyQt5 эти значения будут приходить из полей ввода"""
+    def __init__(self):
         self.defaults = {
             'p': 1e-3,
             'd': 30e-6,
@@ -82,6 +80,14 @@ class AdvancedController:
         for group_idx, group in enumerate(groups_data):
             #if not group.get('active', True):
             #    continue
+            block_is_active = group.get('active', True)
+
+            has_individual_lenses = ('lenses' in group and
+                            group['lenses'] and
+                            len(group['lenses']) >= group.get('N', 1))
+
+            if has_individual_lenses:
+                block_is_active = any(lens.get('active', True) for lens in group['lenses'])
                 
             n_lenses = min(group['N'], 5)
             total_lens_width = n_lenses * p
@@ -105,7 +111,7 @@ class AdvancedController:
                     # Режим RL: все линзы в блоке одинаковые
                     preset = group['preset']
                     material = group.get('material', 'Be')
-                    active = group.get('active', True)
+                    active = block_is_active#group.get('active', True)
                 
                 # Пропускаем неактивные линзы (только в режиме GUI)
                 if not active:
@@ -198,133 +204,6 @@ class AdvancedController:
         
         return chain    
     
-    '''
-    def _build_vacuum_tf(self, source_mgr, groups_data, first_dist, tf_name="Vacuum"):
-        if not groups_data:
-            return []
-
-        p = self.defaults['p']  # 1e-3 = 1 мм
-        u_vac = self.defaults['u_vac']
-        block_length = 0.01  # 10 мм
-        inter_block_gap = self.defaults.get('inter_block_gap', 0.001)
-
-        # === 1. РАССТАНОВКА БЛОКОВ (все линзы, включая неактивные) ===
-        all_lenses = []
-
-        current_block_start = first_dist
-
-        for group_idx, group in enumerate(groups_data):
-            n_lenses = min(group['N'], 5)
-
-            # === Позиции линз внутри блока ===
-            if n_lenses * p > block_length:
-                raise ValueError(f"Block {group_idx+1}: {n_lenses} lenses don't fit in 10 mm block")
-
-            total_lens_width = n_lenses * p
-            free_space = block_length - total_lens_width
-            wall_thickness = free_space / 2.0
-
-            for lens_idx in range(n_lenses):
-                pos_in_block = wall_thickness + (lens_idx + 0.5) * p
-                abs_pos = current_block_start + pos_in_block
-
-                # Получаем preset и active
-                if 'lenses' in group and group['lenses'] is not None and len(group['lenses']) == n_lenses:
-                    lens_info = group['lenses'][lens_idx]
-                else:
-                    lens_info = {'preset': group['preset'], 'active': group.get('active', True)}
-
-                all_lenses.append({
-                    'preset': lens_info['preset'],
-                    'active': lens_info.get('active', True),
-                    'abs_pos': abs_pos,
-                    'block_index': group_idx + 1,
-                    'lens_index_in_block': lens_idx + 1,
-                    'material': lens_info.get('material', LENS_PRESETS[lens_info['preset']].get('material', 'Be'))
-                })
-
-            # Переход к следующему блоку
-            current_block_start += block_length + inter_block_gap
-
-        # === 2. СОЗДАНИЕ ЦЕПОЧКИ (только активные линзы) ===
-        chain = []
-        for i, lens_geom in enumerate(all_lenses):
-            if not lens_geom['active']:
-                continue
-
-            lens = LensGenerator.create_lens_group(
-                lens_geom['preset'],
-                N=1,
-                p=p,
-                u=u_vac,
-                source_manager=source_mgr,
-                material = lens_geom.get('material')
-            )
-
-            lens['abs_pos'] = lens_geom['abs_pos']  # ← передаём абсолютную позицию
-            lens['tf_name'] = tf_name
-            lens['block_index'] = lens_geom['block_index']
-            lens['lens_index_in_tf'] = len(chain) + 1
-            lens['lens_index_in_block'] = lens_geom['lens_index_in_block']
-            lens['is_first_in_tf'] = (len(chain) == 0)
-            lens['is_last_in_block'] = (lens_geom['lens_index_in_block'] == groups_data[lens_geom['block_index'] - 1]['N'])
-            lens['is_last_in_tf'] = False
-            lens['tf_type'] = 'vacuum'
-
-            chain.append(lens)
-
-        if chain:
-            chain[-1]['is_last_in_tf'] = True
-
-        return chain
-
-    def _build_air_tf(self, source_mgr, lenses, first_dist, tf_name="Air"):
-        if not lenses:
-            return []
-
-        p = self.defaults['p']
-        u = self.defaults['u_air']
-        
-        step = p + u
-
-        all_positions = []
-        for i in range(len(lenses)):
-            pos = first_dist + i * step  # ← теперь это absolute_start + offset
-            all_positions.append(pos)
-
-        chain = []
-        for i, (lens_info, abs_pos) in enumerate(zip(lenses, all_positions)):
-            if not lens_info.get('active', True):
-                continue
-
-            preset = lens_info.get('preset', 'R50')
-            material = lens_info.get('material')
-            lens = LensGenerator.create_lens_group(
-                preset,
-                N=1,
-                p=p,
-                u=u,
-                source_manager=source_mgr,
-                material = material
-            )
-
-            lens['abs_pos'] = abs_pos  # ← передаём абсолютную позицию
-            lens['tf_name'] = tf_name
-            lens['block_index'] = 1
-            lens['lens_index_in_tf'] = len(chain) + 1
-            lens['is_first_in_tf'] = (len(chain) == 0)
-            lens['lens_index_in_block'] = i + 1
-            lens['is_last_in_block'] = False
-            lens['is_last_in_tf'] = False
-            lens['tf_type'] = 'Air (Array)'
-
-            chain.append(lens)
-
-        if chain:
-            chain[-1]['is_last_in_tf'] = True
-
-        return chain
-    '''
     def _calculate_block_length(self, block_type, block_conf):
         """Вычисляет длину TF в метрах."""
         if block_type == 'air':
@@ -337,15 +216,6 @@ class AdvancedController:
             #return N_blocks * 0.01  # 10 мм на блок
     
     def run_calculations(self, energy, structure_config, source_params = None):
-        # 1. Настройка источника
-        #start_time = time.time()
-        #print(f"[DEBUG] Config received in controller: {len(structure_config)} TFs")
-        #for i, tf in enumerate(structure_config):
-        #    if tf['type'] == 'vacuum':
-        #        print(f"  TF{i} (vacuum): {len(tf['groups'])} groups")
-        #        for j, g in enumerate(tf['groups']):
-        #            print(f"    Group {j}: N={g.get('N')}, active={g.get('active')}")
-
         if source_params is not None:
             source_mgr = SourceManager(
                 energy = source_params['energy'],
@@ -358,8 +228,6 @@ class AdvancedController:
             source_mgr = SourceManager(energy = energy)
             
         source_params = source_mgr.get_params_dict()
-        #source_params['sx_fwhm'] = 7.47e-5# source_params['sx_fwhm'],
-        #source_params['sy_fwhm'] = 1.39e-5#source_params['sy_fwhm'],
 
         # 2. Сборка конфигурации системы (геометрия)
         lens_chain = []
@@ -400,14 +268,6 @@ class AdvancedController:
             source_params = source_params
         )
 
-        # 4. Отчёт
-        #build_time = time.time()
-        #results, final_state = Calculator.propagate(lens_chain, source_params)
-        #calc_time = time.time()
-
-        #print(f"Build time: {(build_time - start_time)*1000:.1f}ms, "
-        #    f"Calc time: {(calc_time - build_time)*1000:.1f}ms")
-
         return self._generate_report(source_params, results, final_state)
     
     def _generate_report(self, source_params, results, final_state):
@@ -415,11 +275,6 @@ class AdvancedController:
             return {"error": "No results computed"}
         
         last = results[-1]
-
-        #print(f"DEBUG: final_state has T_blocks: {hasattr(final_state, 'T_blocks')}")
-        #if hasattr(final_state, 'T_blocks'):
-        #    print(f"DEBUG: T_blocks length: {len(final_state.T_blocks)}")
-        #    print(f"DEBUG: T_blocks content: {final_state.T_blocks}")
         
         T_total = 1.0
         if hasattr(final_state, 'T_blocks') and final_state.T_blocks:
@@ -428,24 +283,12 @@ class AdvancedController:
         else:
             # АЛЬТЕРНАТИВНЫЙ ИСТОЧНИК
             T_total = getattr(last, 'T_total', 1.0)
-            print(f"DEBUG: Using last.T_total = {T_total}")
-
-            
-        #T_total = 1.0
-        #for t in final_state.T_blocks:
-        #    T_total *= t
-            #print(t)
-        
-        #print('T_total', T_total)
-        #print('size_x', last.sfx)
-            #'size_y': last.sfy,
+            #print(f"DEBUG: Using last.T_total = {T_total}")
 
         G_total = 1.0
-        #for g in final_state.G_blocks:
-        #    G_total *= g
 
         return {
-            'energy': source_params['energy'], #'energy': source_params['E'],
+            'energy': source_params['energy'],
             'final_pos': last.position,
             'L2': last.L2,
             'M_total': last.M_total,
@@ -455,5 +298,5 @@ class AdvancedController:
             'size_y': last.sfy,
             'dof_x': last.dof_x,
             'dof_y': last.dof_y,
-            'full_history': results  # ← свежий, независимый список
+            'full_history': results
         }

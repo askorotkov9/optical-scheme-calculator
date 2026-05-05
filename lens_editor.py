@@ -12,7 +12,7 @@ class TFEditorDialog(QDialog):
         super().__init__(parent)
         self.tf_type = tf_type
         self.setWindowTitle(title)
-        self.resize(600, 400)
+        self.resize(800, 600)
         
         self.config = config or self._default_config()
         self.energy = energy
@@ -30,18 +30,17 @@ class TFEditorDialog(QDialog):
     def setup_ui(self):
         layout = QVBoxLayout(self)
 
-        # Таблица
         self.table = QTableWidget()
         layout.addWidget(self.table)
 
-        # Кнопки
+        # Buttons
         btn_layout = QHBoxLayout()
         self.btn_ok = QPushButton("OK")
         self.btn_cancel = QPushButton("Cancel")
-        self.btn_details = QPushButton("Edit Lens Details...")  # Только для vacuum
+        self.btn_details = QPushButton("Edit Lens Details...")  # Vacuum only
         self.btn_details.setVisible(self.tf_type == 'vacuum')
 
-        # Кнопки Add/Remove Group (только для Vacuum)
+        # Buttons Add/Remove Group (Vacuum only)
         self.btn_add_group = QPushButton("Add Group")
         self.btn_remove_group = QPushButton("Remove Last")
         if self.tf_type == 'vacuum':
@@ -95,7 +94,6 @@ class TFEditorDialog(QDialog):
         except:
             delta, betta, mu = 0, 0, 0
 
-        # Найдём QLabel в строке и обновим
         delta_lbl = self.table.cellWidget(row, 4)
         betta_lbl = self.table.cellWidget(row, 5)
         mu_lbl = self.table.cellWidget(row, 6)
@@ -145,7 +143,7 @@ class TFEditorDialog(QDialog):
         #self.table.setCellWidget(row, 5, betta_lbl)
         #self.table.setCellWidget(row, 6, mu_lbl)
 
-        # Подключим обновление при смене материала
+        # Update if lens material changed
         mat_combo.currentTextChanged.connect(lambda mat, r=row: self.update_optical_constants_for_row(r, mat, self.energy))
 
     def _load_vacuum_row(self, row, block):
@@ -165,6 +163,7 @@ class TFEditorDialog(QDialog):
         # Active
         chk = QCheckBox()
         chk.setChecked(block['active'])
+        chk.stateChanged.connect(lambda state, r=row: self.on_block_active_changed(r, state)) #для всего блока
         container = QWidget()
         lay = QHBoxLayout(container)
         lay.addWidget(chk)
@@ -177,6 +176,20 @@ class TFEditorDialog(QDialog):
         len_item = QTableWidgetItem("10.0")
         len_item.setFlags(len_item.flags() & ~Qt.ItemIsEditable)
         self.table.setItem(row, 3, len_item)
+
+    def on_block_active_changed(self, row, state):
+        """Обновляет active для всех линз в lenses блока."""
+        block = self.config[row]
+        is_active = state == Qt.Checked
+
+        # Обновляем active для всех линз в lenses
+        if 'lenses' in block and block['lenses']:
+            for lens in block['lenses']:
+                lens['active'] = is_active
+        else:
+            # Если lenses нет, обновляем сам блок
+            block['active'] = is_active
+
 
     def add_vacuum_group(self):
         row = self.table.rowCount()
@@ -211,7 +224,6 @@ class TFEditorDialog(QDialog):
         len_item.setFlags(len_item.flags() & ~Qt.ItemIsEditable)
         self.table.setItem(row, 3, len_item)
 
-        # Добавляем в config
         self.config.append({
             'N': 1,
             'preset': 'R500',
@@ -224,15 +236,13 @@ class TFEditorDialog(QDialog):
         if row > 0:
             self.table.removeRow(row - 1)
             if len(self.config) >= row:
-                self.config.pop(row - 1)  # удаляем последний элемент
-            #self.config.pop()  # удаляем последний элемент
+                self.config.pop(row - 1)
 
     def on_block_n_changed(self, row, n):
-        # Обновляем внутреннюю структуру block['lenses']
         block = self.config[row]
         
         if 'lenses' not in block or block['lenses'] is None:
-            # Инициализируем lenses, если его нет
+            # Initialize lenses if None
             preset = block['preset']
             active = block.get('active', True)
             material = block.get('material', LENS_PRESETS[preset]['material'])
@@ -243,7 +253,6 @@ class TFEditorDialog(QDialog):
         else:
             current = block['lenses']
             if n > len(current):
-                # Добавляем новые линзы с теми же параметрами, что и у блока
                 preset = block['preset']
                 active = block.get('active', True)
                 material = block.get('material', LENS_PRESETS[preset]['material'])
@@ -263,7 +272,7 @@ class TFEditorDialog(QDialog):
 
         block = self.config[row]
         if 'lenses' not in block or block['lenses'] is None:
-            # Инициализируем, если ещё не было
+            # Initialize if None
             block['lenses'] = [
                 {'preset': block['preset'], 
                  'active': block.get('active', True), 
@@ -277,7 +286,7 @@ class TFEditorDialog(QDialog):
             self.config[row]['lenses'] = dialog.get_lenses()
 
     def get_config(self):
-        """Возвращает обновлённую конфигурацию"""
+        """Returns the updated configuration"""
         result = []
         for row in range(self.table.rowCount()):
             if self.tf_type == 'air':
@@ -294,20 +303,16 @@ class TFEditorDialog(QDialog):
                 sb = self.table.cellWidget(row, 0)
                 cb = self.table.cellWidget(row, 1)
                 chk_container = self.table.cellWidget(row, 2)
-                #mat_combo = self.table.cellWidget(row, 3)
 
-                # Обновляем config[row] напрямую
                 n = sb.value()
                 preset = cb.currentText()
                 active = chk_container.chk.isChecked()
-                #material = mat_combo.currentText() if mat_combo else 'Be'
 
-                # Обновляем внутреннюю структуру
+                # Update inner structure
                 if row < len(self.config):
                     self.config[row]['N'] = n
                     self.config[row]['preset'] = preset
                     self.config[row]['active'] = active
-                    #self.config[row]['material'] = material
                 else:
                     self.config.append({'N': n, 'preset': preset, 'active': active})
 
@@ -318,7 +323,7 @@ class TFEditorDialog(QDialog):
                     'preset': cb.currentText(),
                     #'material': material,
                     'active': chk_container.chk.isChecked(),
-                    'lenses': lenses
+                    'lenses': self.config[row].get('lenses', None) 
                 })
         return result
 
@@ -357,8 +362,8 @@ class LensDetailDialog(QDialog):
         if n == 0:
             return
 
-        block_length = self.block_length  # 10.0 мм
-        p = 1.0  # 1 мм на линзу (должно браться из defaults, но для GUI в мм)
+        block_length = self.block_length  # 10.0 mm
+        p = 1.0 # in mm
 
         if n * p > block_length:
             return
@@ -404,11 +409,6 @@ class LensDetailDialog(QDialog):
             mat_combo.currentTextChanged.connect(
                 lambda mat, row = i: self.update_optical_constants_for_row(row, mat, self.energy)
             )
-
-            # Make position read-only
-            #for col in [3, 4]:
-            #    item = self.table.item(i, col)
-            #    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
 
     def update_optical_constants_for_row(self, row, material, energy):
         mat_obj = get_material(material)

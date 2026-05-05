@@ -1,4 +1,5 @@
 import sys
+import locale
 import os
 import pandas as pd
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
@@ -10,9 +11,18 @@ from PyQt5.QtCore import Qt
 from main_controller import AdvancedController
 from parameters_micro1 import LENS_PRESETS, LensGenerator
 from lens_editor import TFEditorDialog, LensDetailDialog
-from computations import LENS_RESULT_FIELDS
+from computations import LENS_RESULT_FIELDS, Formulas
 from column_settings import ColumnSettingsDialog
 from source_editor import SourceEditorDialog
+
+#For '.' delimeter
+try:
+    locale.setlocale(locale.LC_ALL, 'C')
+except locale.Error:
+    try:
+        locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
+    except locale.Error:
+        pass
 
 # --- Универсальный класс трансфокатора ---
 class Transfocator:
@@ -27,8 +37,8 @@ class Transfocator:
         # Конфигурация
         self.lenses = self._build_air_lenses() if tf_type == "air" else []
         # Теперь groups — это список словарей с N, preset, active
-        self.groups = [{"N": 1, "preset": preset, "active": True}, {"N": 2, "preset": preset, "active": True}, 
-                       {"N": 3, "preset": preset, "active": True}, {"N": 4, "preset": preset, "active": False},
+        self.groups = [{"N": 1, "preset": preset, "active": False}, {"N": 2, "preset": preset, "active": False}, 
+                       {"N": 3, "preset": preset, "active": False}, {"N": 4, "preset": preset, "active": False},
                        {"N": 5, "preset": preset, "active": False}, {"N": 5, "preset": preset, "active": False},
                        {"N": 5, "preset": preset, "active": False}, {"N": 5, "preset": preset, "active": False},
                        {"N": 5, "preset": preset, "active": False}, {"N": 5, "preset": preset, "active": False},
@@ -37,6 +47,9 @@ class Transfocator:
 
         # UI виджеты (инициализируются при создании UI)
         self.ui_widgets = {}
+
+    #def _build_vacuum_groups(self, total_count, preset):
+
 
     def _build_air_lenses(self):
         active_set = set()
@@ -94,7 +107,7 @@ class TransfocatorManager:
 class XRayCalcApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("X-Ray Transfocator Calculator (PyQt5)")
+        self.setWindowTitle("X-Ray Lens Scheme Parameters Calculator")
         self.resize(1200, 800)
 
         default_display_fields = {'lens_index_in_block','position', 'L1', 'L2', 'sfx', 'sfy', 'T', 'M'}
@@ -236,7 +249,7 @@ class XRayCalcApp(QMainWindow):
         hbox_pos = QHBoxLayout()
         hbox_pos.addWidget(QLabel("Position (m):"))
         spin_pos = QDoubleSpinBox()
-        spin_pos.setRange(0, 100)
+        spin_pos.setRange(0, 1000)
         spin_pos.setValue(27.1 if tf.name == "TF1" else 64)
         spin_pos.setDecimals(4)
         hbox_pos.addWidget(spin_pos)
@@ -436,6 +449,8 @@ class XRayCalcApp(QMainWindow):
 
         structure_config = []
         for tf in self.tf_manager.tfs:
+            if not hasattr(tf, 'ui_widgets') or 'gb' not in tf.ui_widgets:
+                continue
             if not tf.ui_widgets['gb'].isChecked():
                 continue
 
@@ -500,6 +515,8 @@ class XRayCalcApp(QMainWindow):
             f"<b>Symmetry Distance (from last lens position):</b> {(focus_pos - last.symmetry_dist):.4f}m,  {(focus_pos + last.symmetry_dist):.4f}m<br>"
             f"<b>Symmetry Beam Size X:</b> {last.symm_beam_size_x * 1e6:.2f} um<br>"
             f"<b>Symmetry Beam Size Y:</b> {last.symm_beam_size_y * 1e6:.2f} um<br>"
+            f"<b>Size X at detector (65m):</b> {Formulas.beamsize_at_distance(last.alx, last.L2, 65 - self._last_report['final_pos'] - self._last_report['L2'], last.sfx)* 1e6:.2f} um<br>"
+            f"<b>Size Y at detector (65m):</b> {Formulas.beamsize_at_distance(last.aly, last.L2, 65 - self._last_report['final_pos'] - self._last_report['L2'], last.sfy)* 1e6:.2f} um<br>"                
         )
         self.txt_summary.setHtml(summary)
 
@@ -654,23 +671,27 @@ class XRayCalcApp(QMainWindow):
                     "Symmetry Distance (from lens)",
                     "Symmetry Distance (from lens)",
                     "Symmetry Beam Size X",
-                    "Symmetry Beam Size Y"
+                    "Symmetry Beam Size Y",
+                    'Size X at detector (65m)',
+                    'Size Y at detector (65m)',
                 ],
                 "Value": [
                     self._last_report['energy'],
                     self._last_report['final_pos'],
                     self._last_report['L2'],
-                    focus_pos,  # focus_pos
+                    focus_pos,
                     self._last_report['T'] * 100,
                     self._last_report['size_x'] * 1e6,
                     self._last_report['size_y'] * 1e6,
-                    last.dof_x,  # если есть
-                    last.dof_y,  # если есть
+                    last.dof_x,
+                    last.dof_y,
                     last.symmetry_dist,
                     focus_pos - last.symmetry_dist,
                     focus_pos + last.symmetry_dist,
                     last.symm_beam_size_x * 1e6,
-                    last.symm_beam_size_y * 1e6
+                    last.symm_beam_size_y * 1e6,
+                    Formulas.beamsize_at_distance(last.alx, last.L2, 65 - self._last_report['final_pos'] - self._last_report['L2'], last.sfx),
+                    Formulas.beamsize_at_distance(last.aly, last.L2, 65 - self._last_report['final_pos'] - self._last_report['L2'], last.sfy)
                 ]
             }
             df_summary = pd.DataFrame(summary_data)
@@ -678,7 +699,6 @@ class XRayCalcApp(QMainWindow):
             df_summary.to_csv(summary_path, index=False)
 
             # 2. Экспорт истории каждого TF
-
 
             tf_histories = {}
             for item in history:
